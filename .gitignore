@@ -1,0 +1,19 @@
+*.local.*
+
+coverage/
+
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+docs/local/
+
+.env
+.env.local
+
+
+# Added by cargo
+
+/target

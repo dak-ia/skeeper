@@ -1,0 +1,38 @@
+[package]
+name = "skeeper"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "純粋にセッション永続化に特化した軽量ツール"
+
+[dependencies]
+anyhow = "1.0.103"
+clap = { version = "4.6.1", features = ["derive"] }
+# ratatui 0.29と版揃え(bump時は同時に上げる)
+crossterm = "0.28"
+nix = { version = "0.31.3", features = ["signal", "feature"] }
+portable-pty = "0.9.0"
+postcard = { version = "1.1.3", features = ["alloc"] }
+rand = "0.10.2"
+ratatui = "0.29.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2.0.18"
+time = { version = "0.3.45", features = ["serde", "formatting", "parsing", "macros", "local-offset"] }
+# ratatui 0.29が =0.2.0 でpinしているので合わせる(ratatui bump時は同時に上げる)
+unicode-width = "=0.2.0"
+uuid = { version = "1.23.4", features = ["v4", "serde"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# 日本語docコメント内の識別子っぽい単語で誤発火するので抑止
+doc_markdown = "allow"
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,25 +8,29 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use time::OffsetDateTime;
 
 use crate::cli::ServerRunArgs;
 use crate::paths;
 use crate::session::{self, SessionMeta};
 
+mod attach;
 mod control;
 mod guards;
 mod pty_io;
 mod signals;
 
+use attach::handle_client;
 use control::control_listener_loop;
 use guards::SessionFileGuard;
 use pty_io::pty_reader_loop;
 use signals::install_termination_handlers;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub(super) const PTY_BUF_SIZE: usize = 4096;
+/// 停滞クライアント検出用。ここを超えるとwriteがtimeoutで抜ける
+pub(super) const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// handshake中に応答しないクライアントを切るため
 pub(super) const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// スクロールバックとして保持するpty出力のバイト数上限(≒数画面ぶん)
@@ -41,8 +46,19 @@ pub(super) static TERM_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// 通常のdetach経路に合流する。single-session server前提のstatic
 pub(super) static DETACH_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// セッションサーバ本体。pty起動 + 制御ソケット + pty出力→scrollbackのバックグラウンド処理まで。
-/// client受け入れ(attach)はPR#c(attach handler追加)まで機能しない
+#[derive(Debug, Clone, Copy)]
+pub(super) enum HandleOutcome {
+    /// クライアントが自発的にdetachした。次のattach待ちに戻る
+    Detached,
+    /// クライアントとの接続が意図せず切れた。次のattach待ちに戻る
+    Disconnected,
+    /// クライアントが不正/衝突で拒否された。次のattach待ちに戻る
+    Rejected,
+    /// ptyの子プロセスが終了した / SIGTERMが要求された。サーバも終了する
+    ChildExited,
+}
+
+/// セッションサーバ本体。pty起動 + 制御ソケット + pty出力→scrollback + client accept + attach handlerまでの全機能
 #[allow(clippy::too_many_lines)] // 起動シーケンスの直列記述を優先
 pub fn run(args: ServerRunArgs) -> Result<()> {
     // 親プロセスのセッションから切り離す(端末のCtrl+C等が伝播しないように)
@@ -79,7 +95,8 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
     // 同じUUIDで残っているstaleなソケットがあれば除去
     let _ = std::fs::remove_file(&socket_path);
     let _ = std::fs::remove_file(&ctl_socket_path);
-    let _listener = UnixListener::bind(&socket_path)?;
+    let listener = UnixListener::bind(&socket_path)?;
+    listener.set_nonblocking(true)?;
     let ctl_listener = UnixListener::bind(&ctl_socket_path)?;
 
     // HOMEフォールバック(~/.skeeper/runが0755など)でも他ユーザーからconnectできないよう、
@@ -128,18 +145,23 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
     };
     session::write_meta_atomic(&meta_path, &meta_initial)?;
 
-    // reader取り出し。masterは持ち続けないとpty閉じでshellが死ぬので保持だけしておく
+    // reader/writer取り出し + masterはMutexで包む(mainスレッド内でresize/lockに使うだけ、Arc不要)
     let master_reader = pty_pair
         .master
         .try_clone_reader()
         .map_err(|e| anyhow!("Failed to clone pty reader: {e}"))?;
-    let _master = pty_pair.master;
+    let master_writer = pty_pair
+        .master
+        .take_writer()
+        .map_err(|e| anyhow!("Failed to take pty writer: {e}"))?;
+    let master: Mutex<Box<dyn MasterPty + Send>> = Mutex::new(pty_pair.master);
 
-    // 共有状態。active_clientはattach handler(PR#c)まで常にNone
+    // 共有状態
     let active_client: Arc<Mutex<Option<Arc<Mutex<UnixStream>>>>> = Arc::new(Mutex::new(None));
     // metaはcontrol_listener_loop(別スレッド)からもrename処理で書き換えるためArc
     let meta: Arc<Mutex<SessionMeta>> = Arc::new(Mutex::new(meta_initial));
     let child_exited = Arc::new(AtomicBool::new(false));
+    let child_status: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     // スクロールバック: pty出力の直近ぶんを保持し、新規attach時に再生する
     let scrollback: Scrollback =
         Arc::new(Mutex::new(VecDeque::with_capacity(SCROLLBACK_MAX_BYTES)));
@@ -151,26 +173,61 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
         thread::spawn(move || control_listener_loop(&ctl_listener, &meta, &meta_path_owned));
     }
 
-    // 常時実行のバックグラウンドスレッド: ptyのstdoutを読んで、scrollbackに溜める(接続中クライアントへの配信はattach handler入りPR#cから)
+    // 常時実行のバックグラウンドスレッド: ptyのstdoutを読んで、接続中のクライアントへ流す
     {
         let active_client = Arc::clone(&active_client);
         let scrollback = Arc::clone(&scrollback);
         thread::spawn(move || pty_reader_loop(master_reader, active_client, scrollback));
     }
 
-    // 常時実行のバックグラウンドスレッド: 子プロセス終了を監視
+    // 常時実行のバックグラウンドスレッド: 子プロセス終了を監視して exit code を保存
     {
         let child_exited = Arc::clone(&child_exited);
+        let child_status = Arc::clone(&child_status);
         thread::spawn(move || {
             let mut child = child;
-            let _ = child.wait();
+            let exit_code = child
+                .wait()
+                .ok()
+                .and_then(|s| i32::try_from(s.exit_code()).ok());
+            *child_status.lock().unwrap() = exit_code;
             child_exited.store(true, Ordering::Release);
         });
     }
 
-    // TERM要求または子プロセス終了まで待つ。accept loopはPR#cで追加する
-    while !TERM_REQUESTED.load(Ordering::Acquire) && !child_exited.load(Ordering::Acquire) {
-        thread::sleep(POLL_INTERVAL);
+    // メインの受付ループ
+    let mut writer = master_writer;
+    loop {
+        if child_exited.load(Ordering::Acquire) || TERM_REQUESTED.load(Ordering::Acquire) {
+            break;
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let outcome = handle_client(
+                    stream,
+                    &master,
+                    &mut writer,
+                    &active_client,
+                    &scrollback,
+                    &meta,
+                    &meta_path,
+                    &child_exited,
+                    &child_status,
+                );
+                match outcome {
+                    Ok(HandleOutcome::ChildExited) => break,
+                    Ok(_) => (),
+                    Err(e) => eprintln!("client handling error: {e:#}"),
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(POLL_INTERVAL);
+            }
+            Err(e) => {
+                eprintln!("accept error: {e:#}");
+                break;
+            }
+        }
     }
 
     Ok(())

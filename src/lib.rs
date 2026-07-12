@@ -4,6 +4,7 @@ pub mod display;
 pub mod ipc;
 pub mod name_gen;
 pub mod paths;
+pub mod server;
 pub mod session;
 pub mod term_guard;
 pub mod text;

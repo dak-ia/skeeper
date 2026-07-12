@@ -7,3 +7,4 @@ pub mod paths;
 pub mod session;
 pub mod term_guard;
 pub mod text;
+pub mod tui;

@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod client;
 pub mod display;
 pub mod ipc;
 pub mod name_gen;

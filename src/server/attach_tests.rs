@@ -1,0 +1,86 @@
+use super::*;
+
+use std::collections::VecDeque;
+use std::io::{self, Write};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+
+use portable_pty::{PtySize, native_pty_system};
+use tempfile::tempdir;
+use time::macros::datetime;
+use uuid::Uuid;
+
+use crate::ipc::{self, ClientMsg};
+use crate::session::SessionMeta;
+
+fn fixture_meta() -> SessionMeta {
+    let fixed = datetime!(2000-01-02 03:04:05 UTC);
+    SessionMeta {
+        id: Uuid::from_u128(0x1),
+        name: "sess".to_string(),
+        cwd: PathBuf::from("/"),
+        shell: PathBuf::from("/bin/sh"),
+        created_at: fixed,
+        last_attached_at: None,
+        server_pid: 1,
+        server_started_at: fixed,
+        attached_client_pid: None,
+    }
+}
+
+#[test]
+fn handle_client_rejects_when_client_sends_non_hello() {
+    // 最初のメッセージがHello以外(ここではDetach)なら、handle_clientは無言でshutdownし
+    // HandleOutcome::Rejectedを返す。プロトコル違反を検知した経路のsmoke test
+    let (mut client, server) = UnixStream::pair().unwrap();
+
+    // handle_client呼び出し前にkernel bufferへ書き込んでおくと、
+    // handshake内のread_client_msgが即座に読み取れる
+    ipc::write_client_msg(&mut client, &ClientMsg::Detach).unwrap();
+
+    let pty = native_pty_system()
+        .openpty(PtySize {
+            cols: 24,
+            rows: 8,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    // Rejected経路ではwriter/masterへの実書き込みは発生しないので、writerはsinkでよい
+    let mut writer: Box<dyn Write + Send> = Box::new(io::sink());
+    let master: Mutex<Box<dyn MasterPty + Send>> = Mutex::new(pty.master);
+
+    let active_client: Mutex<Option<std::sync::Arc<Mutex<UnixStream>>>> = Mutex::new(None);
+    let scrollback: Mutex<VecDeque<u8>> = Mutex::new(VecDeque::new());
+    let meta = Mutex::new(fixture_meta());
+    let dir = tempdir().unwrap();
+    let meta_path = dir.path().join("m.json");
+    let child_exited = AtomicBool::new(false);
+    let child_status: Mutex<Option<i32>> = Mutex::new(None);
+
+    let outcome = handle_client(
+        server,
+        &master,
+        &mut writer,
+        &active_client,
+        &scrollback,
+        &meta,
+        &meta_path,
+        &child_exited,
+        &child_status,
+    )
+    .expect("handle_client");
+
+    assert!(matches!(outcome, HandleOutcome::Rejected));
+    // Rejected時にサーバは状態を触らないこと(active_client未登録、meta.attached_client_pidそのまま)
+    assert!(active_client.lock().unwrap().is_none());
+    assert_eq!(meta.lock().unwrap().attached_client_pid, None);
+    // meta_pathは書き込まれていない(HelloOk成功後にしか書かない)
+    assert!(!meta_path.exists());
+
+    // client側は接続を切られているはず。追加writeがEPIPE等で失敗することを確認
+    let write_res = ipc::write_client_msg(&mut client, &ClientMsg::Detach);
+    assert!(write_res.is_err());
+}

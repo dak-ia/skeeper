@@ -1,0 +1,137 @@
+use super::*;
+
+fn parse(argv: &[&str]) -> Cli {
+    Cli::try_parse_from(argv).expect("parse failed")
+}
+
+#[test]
+fn new_without_args_has_no_name_and_no_flags() {
+    let cli = parse(&["skeeper", "new"]);
+    match cli.command {
+        Some(Command::New(args)) => {
+            assert_eq!(args.name, None);
+            assert!(!args.detached);
+            assert_eq!(args.shell, None);
+        }
+        other => panic!("expected New, got {other:?}"),
+    }
+}
+
+#[test]
+fn new_with_name_detached_and_shell_captures_all() {
+    let cli = parse(&["skeeper", "new", "-d", "--shell", "/bin/bash", "myname"]);
+    match cli.command {
+        Some(Command::New(args)) => {
+            assert_eq!(args.name.as_deref(), Some("myname"));
+            assert!(args.detached);
+            assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
+        }
+        other => panic!("expected New, got {other:?}"),
+    }
+}
+
+#[test]
+fn attach_with_name_sets_target() {
+    let cli = parse(&["skeeper", "attach", "foo"]);
+    match cli.command {
+        Some(Command::Attach(args)) => assert_eq!(args.name.as_deref(), Some("foo")),
+        other => panic!("expected Attach, got {other:?}"),
+    }
+}
+
+#[test]
+fn attach_without_name_leaves_name_none() {
+    let cli = parse(&["skeeper", "attach"]);
+    match cli.command {
+        Some(Command::Attach(args)) => assert_eq!(args.name, None),
+        other => panic!("expected Attach, got {other:?}"),
+    }
+}
+
+#[test]
+fn list_and_ls_alias_both_resolve_to_list() {
+    assert!(matches!(
+        parse(&["skeeper", "list"]).command,
+        Some(Command::List)
+    ));
+    assert!(matches!(
+        parse(&["skeeper", "ls"]).command,
+        Some(Command::List)
+    ));
+}
+
+#[test]
+fn rename_with_only_positional_treats_it_as_new_name() {
+    let cli = parse(&["skeeper", "rename", "newname"]);
+    match cli.command {
+        Some(Command::Rename(args)) => {
+            assert_eq!(args.new_name, "newname");
+            assert_eq!(args.old, None);
+        }
+        other => panic!("expected Rename, got {other:?}"),
+    }
+}
+
+#[test]
+fn rename_with_old_flag_targets_named_session() {
+    let cli = parse(&["skeeper", "rename", "-o", "oldname", "newname"]);
+    match cli.command {
+        Some(Command::Rename(args)) => {
+            assert_eq!(args.new_name, "newname");
+            assert_eq!(args.old.as_deref(), Some("oldname"));
+        }
+        other => panic!("expected Rename, got {other:?}"),
+    }
+}
+
+#[test]
+fn kill_without_args_has_no_target_and_no_all_flag() {
+    let cli = parse(&["skeeper", "kill"]);
+    match cli.command {
+        Some(Command::Kill(args)) => {
+            assert_eq!(args.name, None);
+            assert!(!args.all);
+        }
+        other => panic!("expected Kill, got {other:?}"),
+    }
+}
+
+#[test]
+fn kill_with_positional_targets_named_session() {
+    let cli = parse(&["skeeper", "kill", "foo"]);
+    match cli.command {
+        Some(Command::Kill(args)) => {
+            assert_eq!(args.name.as_deref(), Some("foo"));
+            assert!(!args.all);
+        }
+        other => panic!("expected Kill, got {other:?}"),
+    }
+}
+
+#[test]
+fn kill_with_all_flag_sets_all_true() {
+    let cli = parse(&["skeeper", "kill", "-a"]);
+    match cli.command {
+        Some(Command::Kill(args)) => {
+            assert_eq!(args.name, None);
+            assert!(args.all);
+        }
+        other => panic!("expected Kill, got {other:?}"),
+    }
+}
+
+#[test]
+fn d_alias_resolves_to_detach() {
+    assert!(matches!(
+        parse(&["skeeper", "d"]).command,
+        Some(Command::Detach)
+    ));
+}
+
+#[test]
+fn p_alias_resolves_to_prune() {
+    assert!(matches!(
+        parse(&["skeeper", "p"]).command,
+        Some(Command::Prune)
+    ));
+}

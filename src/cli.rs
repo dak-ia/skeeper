@@ -89,3 +89,7 @@ pub struct KillArgs {
     #[arg(short = 'a', long)]
     pub all: bool,
 }
+
+#[cfg(test)]
+#[path = "cli_tests.rs"]
+mod tests;

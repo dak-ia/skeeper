@@ -1,7 +1,4 @@
-use std::path::PathBuf;
-
 use clap::{Args, Parser, Subcommand};
-use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -55,9 +52,6 @@ pub enum Command {
     /// Prune orphan session files (server crashed or otherwise dead)
     #[command(visible_alias = "p")]
     Prune,
-    /// (internal) Run as a session server
-    #[command(name = "__server-run", hide = true)]
-    ServerRun(ServerRunArgs),
 }
 
 #[derive(Debug, Args)]
@@ -94,16 +88,4 @@ pub struct KillArgs {
     /// Kill all sessions
     #[arg(short = 'a', long)]
     pub all: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct ServerRunArgs {
-    #[arg(long)]
-    pub id: Uuid,
-    #[arg(long)]
-    pub name: String,
-    #[arg(long)]
-    pub cwd: PathBuf,
-    #[arg(long)]
-    pub shell: PathBuf,
 }

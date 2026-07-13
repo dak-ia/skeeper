@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -10,10 +11,19 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
-use crate::cli::ServerRunArgs;
 use crate::paths;
 use crate::session::{self, SessionMeta};
+
+/// server::runの引数一式。CLI arg parsingとは切り離してある(fork子で組み立てて渡す)
+#[derive(Debug)]
+pub struct ServerRunArgs {
+    pub id: Uuid,
+    pub name: String,
+    pub cwd: PathBuf,
+    pub shell: PathBuf,
+}
 
 mod attach;
 mod control;

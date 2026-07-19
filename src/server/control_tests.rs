@@ -12,7 +12,7 @@ use tempfile::tempdir;
 use time::macros::datetime;
 use uuid::Uuid;
 
-use crate::ipc::{ControlMsg, write_control_msg};
+use crate::ipc::{ControlMsg, ControlResponse, read_control_response, write_control_msg};
 use crate::server::{ClientEvent, ClientHandle, LAST_STDIN_CLIENT};
 use crate::session::{self, SessionMeta};
 
@@ -176,6 +176,50 @@ fn rename_request_updates_meta_and_persists() {
     assert_eq!(meta_state.lock().unwrap().name, "renamed");
     let persisted = session::read_meta(&meta_path).unwrap();
     assert_eq!(persisted.name, "renamed");
+}
+
+#[test]
+fn query_current_client_returns_last_stdin_pid() {
+    // LAST_STDIN_CLIENTにセットしたpidがそのまま応答で返ることを確認
+    let _guard = LOCK.lock().unwrap();
+
+    let dir = tempdir().unwrap();
+    let meta_path = dir.path().join("meta.json");
+    let meta_state = Mutex::new(dummy_meta());
+    session::write_meta_atomic(&meta_path, &meta_state.lock().unwrap()).unwrap();
+    let active_clients: Mutex<HashMap<u32, ClientHandle>> = Mutex::new(HashMap::new());
+
+    LAST_STDIN_CLIENT.store(4242, Ordering::SeqCst);
+
+    // feed_messageはclient_sideをdropしてしまうので、応答を読むためここでは直に組み立てる
+    let (mut client_side, mut server_side) = UnixStream::pair().unwrap();
+    write_control_msg(&mut client_side, &ControlMsg::QueryCurrentClient).unwrap();
+    handle_control_message(&mut server_side, &active_clients, &meta_state, &meta_path);
+    let resp = read_control_response(&mut client_side).unwrap();
+
+    LAST_STDIN_CLIENT.store(0, Ordering::SeqCst);
+    assert_eq!(resp, ControlResponse::CurrentClient { pid: 4242 });
+}
+
+#[test]
+fn query_current_client_returns_zero_when_no_stdin_yet() {
+    // 誰もまだstdinを送っていない状態ではpid=0で応答する
+    let _guard = LOCK.lock().unwrap();
+
+    let dir = tempdir().unwrap();
+    let meta_path = dir.path().join("meta.json");
+    let meta_state = Mutex::new(dummy_meta());
+    session::write_meta_atomic(&meta_path, &meta_state.lock().unwrap()).unwrap();
+    let active_clients: Mutex<HashMap<u32, ClientHandle>> = Mutex::new(HashMap::new());
+
+    LAST_STDIN_CLIENT.store(0, Ordering::SeqCst);
+
+    let (mut client_side, mut server_side) = UnixStream::pair().unwrap();
+    write_control_msg(&mut client_side, &ControlMsg::QueryCurrentClient).unwrap();
+    handle_control_message(&mut server_side, &active_clients, &meta_state, &meta_path);
+    let resp = read_control_response(&mut client_side).unwrap();
+
+    assert_eq!(resp, ControlResponse::CurrentClient { pid: 0 });
 }
 
 #[test]

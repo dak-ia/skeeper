@@ -1,9 +1,16 @@
+use std::os::unix::net::UnixStream;
+use std::path::Path;
+
+use uuid::Uuid;
+
+use crate::cli::ListArgs;
+use crate::ipc::{self, ControlMsg, ControlResponse};
 use crate::text::pad_or_truncate_display;
 use crate::{display, paths, session};
 
 const STATE_COL_WIDTH: usize = 13;
 
-pub(crate) fn run() -> anyhow::Result<()> {
+pub(crate) fn run(args: ListArgs) -> anyhow::Result<()> {
     let base_dir = paths::runtime_dir()?;
     let mut sessions = session::list_all_meta(&base_dir).unwrap_or_default();
 
@@ -17,6 +24,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
 
     // ローカルoffsetを取れる環境ではローカル時刻で表示する
     let offset = display::local_offset();
+
+    // pty内から呼ばれたときだけ、自分のsessionのserverに「今stdin送ってる自分」を問い合わせる。
+    // session外からのlistでは意味を持たないのでスキップ(問い合わせ先が特定できない)
+    let current_pid = current_session_stdin_pid(&base_dir);
 
     // ヘッダ。cwdは可変長にしたいので最後、他の列は固定幅
     println!(
@@ -51,9 +62,45 @@ pub(crate) fn run() -> anyhow::Result<()> {
             created = pad_or_truncate_display(&created, 19),
             last = pad_or_truncate_display(&last_attached, 19),
         );
+
+        // --long指定時のみ、attach中clientのpidを補助行として出す(未接続なら追加行なし)
+        if args.long && !s.attached_client_pids.is_empty() {
+            println!(
+                "  Clients: {}",
+                format_clients(&s.attached_client_pids, current_pid)
+            );
+        }
     }
 
     Ok(())
+}
+
+/// SKEEPER_SESSION_IDが設定されていれば、そのsessionのctlに問い合わせて直近stdin送信元のpidを取得する。
+/// session外・接続失敗・pid=0はすべてNone(マーカーなし)として扱う
+fn current_session_stdin_pid(base_dir: &Path) -> Option<u32> {
+    let id_str = std::env::var("SKEEPER_SESSION_ID").ok()?;
+    let id = Uuid::parse_str(&id_str).ok()?;
+    let ctl_path = paths::ctl_path(base_dir, &id);
+    let mut stream = UnixStream::connect(&ctl_path).ok()?;
+    ipc::write_control_msg(&mut stream, &ControlMsg::QueryCurrentClient).ok()?;
+    let ControlResponse::CurrentClient { pid } = ipc::read_control_response(&mut stream).ok()?;
+    // pid=0は「まだ誰もstdin送っていない」状態。マーカーを付ける対象がいない
+    if pid == 0 { None } else { Some(pid) }
+}
+
+/// "1001, 1002 (me), 1003" のような表示文字列を組み立てる。currentがNoneならマーカーなし
+fn format_clients(pids: &[u32], current: Option<u32>) -> String {
+    let parts: Vec<String> = pids
+        .iter()
+        .map(|&p| {
+            if current == Some(p) {
+                format!("{p} (me)")
+            } else {
+                p.to_string()
+            }
+        })
+        .collect();
+    parts.join(", ")
 }
 
 #[cfg(test)]

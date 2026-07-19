@@ -37,6 +37,15 @@ pub enum ControlMsg {
     RequestDetach,
     /// セッション名を変更するようサーバに依頼する
     RequestRename { new_name: String },
+    /// 直近stdinを送ったclientのpidを問い合わせる(応答はControlResponse::CurrentClient)
+    QueryCurrentClient,
+}
+
+/// 制御ソケットでサーバがclientに返す応答。fire-and-forgetでないqueryだけがここに来る
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ControlResponse {
+    /// QueryCurrentClientへの応答。pid=0は「まだ誰もstdin送っていない」を意味する
+    CurrentClient { pid: u32 },
 }
 
 pub fn write_client_msg<W: Write>(w: &mut W, msg: &ClientMsg) -> io::Result<()> {
@@ -60,6 +69,14 @@ pub fn write_control_msg<W: Write>(w: &mut W, msg: &ControlMsg) -> io::Result<()
 }
 
 pub fn read_control_msg<R: Read>(r: &mut R) -> io::Result<ControlMsg> {
+    read_frame(r)
+}
+
+pub fn write_control_response<W: Write>(w: &mut W, msg: &ControlResponse) -> io::Result<()> {
+    write_frame(w, msg)
+}
+
+pub fn read_control_response<R: Read>(r: &mut R) -> io::Result<ControlResponse> {
     read_frame(r)
 }
 

@@ -19,7 +19,7 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         None => bare::run(),
         Some(Command::New(args)) => new::run(args),
         Some(Command::Attach(args)) => attach::run(args),
-        Some(Command::List) => list::run(),
+        Some(Command::List(args)) => list::run(args),
         Some(Command::Detach) => detach::run(),
         Some(Command::Rename(args)) => rename::run(args),
         Some(Command::Kill(args)) => kill::run(args),

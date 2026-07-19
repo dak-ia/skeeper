@@ -52,12 +52,30 @@ fn attach_without_name_leaves_name_none() {
 fn list_and_ls_alias_both_resolve_to_list() {
     assert!(matches!(
         parse(&["skeeper", "list"]).command,
-        Some(Command::List)
+        Some(Command::List(_))
     ));
     assert!(matches!(
         parse(&["skeeper", "ls"]).command,
-        Some(Command::List)
+        Some(Command::List(_))
     ));
+}
+
+#[test]
+fn list_with_long_flag() {
+    let cli = parse(&["skeeper", "list", "--long"]);
+    match cli.command {
+        Some(Command::List(args)) => assert!(args.long),
+        other => panic!("expected List, got {other:?}"),
+    }
+}
+
+#[test]
+fn list_short_l_flag() {
+    let cli = parse(&["skeeper", "list", "-l"]);
+    match cli.command {
+        Some(Command::List(args)) => assert!(args.long),
+        other => panic!("expected List, got {other:?}"),
+    }
 }
 
 #[test]

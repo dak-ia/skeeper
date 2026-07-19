@@ -9,5 +9,5 @@ fn run_returns_ok_when_runtime_dir_is_empty() {
         std::env::set_var("XDG_RUNTIME_DIR", dir.path());
         std::env::set_var("HOME", dir.path());
     }
-    run().unwrap();
+    run(ListArgs { long: false }).unwrap();
 }

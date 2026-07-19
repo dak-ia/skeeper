@@ -20,8 +20,15 @@ const STDIN_BUF_SIZE: usize = 4096;
 /// SIGWINCHを受けたら立てるフラグ。attachメインループが検知してResize送信する
 static SIGWINCH_RECEIVED: AtomicBool = AtomicBool::new(false);
 
+/// SIGTERMを受けたら立てるフラグ。attachメインループが検知してDetach送信する
+static SIGTERM_RECEIVED: AtomicBool = AtomicBool::new(false);
+
 extern "C" fn sigwinch_handler(_: nix::libc::c_int) {
     SIGWINCH_RECEIVED.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn sigterm_handler(_: nix::libc::c_int) {
+    SIGTERM_RECEIVED.store(true, Ordering::SeqCst);
 }
 
 fn install_sigwinch_handler() -> Result<()> {
@@ -34,6 +41,19 @@ fn install_sigwinch_handler() -> Result<()> {
     );
     unsafe { sigaction(Signal::SIGWINCH, &action) }
         .context("Failed to install SIGWINCH handler")?;
+    Ok(())
+}
+
+fn install_sigterm_handler() -> Result<()> {
+    // 外部プロセスからの`kill -TERM <client_pid>`を、terminal閉じ(SIGHUP)相当の
+    // 「このattachだけ穏やかにdetach」として扱う。プロセス即死ではなくフラグを立てて、
+    // ループがDetachをserverに送る。SA_RESTARTはSIGWINCHと同じ理由
+    let action = SigAction::new(
+        SigHandler::Handler(sigterm_handler),
+        SaFlags::SA_RESTART,
+        SigSet::empty(),
+    );
+    unsafe { sigaction(Signal::SIGTERM, &action) }.context("Failed to install SIGTERM handler")?;
     Ok(())
 }
 
@@ -63,6 +83,7 @@ pub fn attach(socket_path: &Path) -> Result<()> {
     }
 
     install_sigwinch_handler()?;
+    install_sigterm_handler()?;
     let _term = TerminalGuard::enter()?;
 
     let write_stream = Arc::new(Mutex::new(stream.try_clone()?));
@@ -102,6 +123,11 @@ pub fn attach(socket_path: &Path) -> Result<()> {
                     &ClientMsg::Resize { cols: c, rows: r },
                 );
             }
+        }
+        // SIGTERM検知 → Detachを送るだけでbreakはしない。serverがDetachAckを返し、
+        // 既存のDetachAck分岐でloopを抜けて後始末する経路に合流させる
+        if SIGTERM_RECEIVED.swap(false, Ordering::AcqRel) {
+            let _ = ipc::write_client_msg(&mut *write_stream.lock().unwrap(), &ClientMsg::Detach);
         }
 
         match srv_rx.recv_timeout(POLL_INTERVAL) {

@@ -39,7 +39,7 @@ pub enum Command {
     Attach(AttachArgs),
     /// List all sessions
     #[command(visible_alias = "ls")]
-    List,
+    List(ListArgs),
     /// Detach from the current session
     #[command(visible_alias = "d")]
     Detach,
@@ -70,6 +70,13 @@ pub struct NewArgs {
 pub struct AttachArgs {
     /// Session name to attach to (opens an interactive picker if omitted)
     pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Args)]
+pub struct ListArgs {
+    /// Show attached client pids for each session
+    #[arg(short = 'l', long)]
+    pub long: bool,
 }
 
 #[derive(Debug, Args)]

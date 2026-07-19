@@ -170,3 +170,47 @@ fn control_msg_framing_roundtrip_rename() {
     let back = read_control_msg(&mut &buf[..]).unwrap();
     assert_eq!(msg, back);
 }
+
+#[test]
+fn control_query_current_client_roundtrip_postcard() {
+    let msg = ControlMsg::QueryCurrentClient;
+    let bytes = postcard::to_allocvec(&msg).unwrap();
+    let back: ControlMsg = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(msg, back);
+}
+
+#[test]
+fn control_msg_framing_roundtrip_query_current_client() {
+    let msg = ControlMsg::QueryCurrentClient;
+    let mut buf = Vec::new();
+    write_control_msg(&mut buf, &msg).unwrap();
+    let back = read_control_msg(&mut &buf[..]).unwrap();
+    assert_eq!(msg, back);
+}
+
+#[test]
+fn control_response_current_client_roundtrip_postcard() {
+    let msg = ControlResponse::CurrentClient { pid: 12345 };
+    let bytes = postcard::to_allocvec(&msg).unwrap();
+    let back: ControlResponse = postcard::from_bytes(&bytes).unwrap();
+    assert_eq!(msg, back);
+}
+
+#[test]
+fn control_response_framing_roundtrip_current_client() {
+    let msg = ControlResponse::CurrentClient { pid: 4242 };
+    let mut buf = Vec::new();
+    write_control_response(&mut buf, &msg).unwrap();
+    let back = read_control_response(&mut &buf[..]).unwrap();
+    assert_eq!(msg, back);
+}
+
+#[test]
+fn control_response_framing_roundtrip_current_client_zero() {
+    // pid=0(まだ誰もstdin送ってない)も普通に往復できる
+    let msg = ControlResponse::CurrentClient { pid: 0 };
+    let mut buf = Vec::new();
+    write_control_response(&mut buf, &msg).unwrap();
+    let back = read_control_response(&mut &buf[..]).unwrap();
+    assert_eq!(msg, back);
+}

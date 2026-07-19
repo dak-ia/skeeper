@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
-use crate::ipc::{self, ControlMsg};
+use crate::ipc::{self, ControlMsg, ControlResponse};
 use crate::session::{self, SessionMeta};
 
 use super::{ClientHandle, HANDSHAKE_READ_TIMEOUT, LAST_STDIN_CLIENT};
@@ -49,6 +49,11 @@ fn handle_control_message(
             let mut m = meta.lock().unwrap();
             m.name = new_name;
             let _ = session::write_meta_atomic(meta_path, &m);
+        }
+        Ok(ControlMsg::QueryCurrentClient) => {
+            let pid = LAST_STDIN_CLIENT.load(Ordering::Acquire);
+            // write失敗はclientが既に切ってしまった等なので無視する(list側もsilent ignore)
+            let _ = ipc::write_control_response(stream, &ControlResponse::CurrentClient { pid });
         }
         Err(_) => {}
     }

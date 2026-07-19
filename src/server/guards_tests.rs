@@ -1,13 +1,16 @@
-use super::{AttachStateGuard, SessionFileGuard};
+use super::{AttachStateGuard, ClientHandle, SessionFileGuard};
+use crate::server::ClientEvent;
 use crate::session::{self, SessionMeta};
-use std::os::unix::net::UnixStream;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use time::macros::datetime;
 use uuid::Uuid;
 
-fn fixture_meta(attached_pid: Option<u32>) -> SessionMeta {
+fn fixture_meta(attached_pids: Vec<u32>) -> SessionMeta {
     let ts = datetime!(2000-01-02 03:04:05 UTC);
     SessionMeta {
         id: Uuid::from_u128(0x1),
@@ -18,8 +21,19 @@ fn fixture_meta(attached_pid: Option<u32>) -> SessionMeta {
         last_attached_at: None,
         server_pid: 1,
         server_started_at: ts,
-        attached_client_pid: attached_pid,
+        attached_client_pids: attached_pids,
     }
+}
+
+/// Receiverはテスト終了までscopeで保持しないとevent_tx.sendがErrになる。
+/// このtestではsendしないので実害はないが、Receiverの生存を明示する意図で一緒に返す
+fn make_client_handle() -> (ClientHandle, mpsc::Receiver<ClientEvent>) {
+    let (event_tx, event_rx) = mpsc::channel::<ClientEvent>();
+    let handle = ClientHandle {
+        should_detach: Arc::new(AtomicBool::new(false)),
+        event_tx,
+    };
+    (handle, event_rx)
 }
 
 #[test]
@@ -63,18 +77,19 @@ fn session_file_guard_drop_ignores_missing_files_without_panic() {
 fn attach_state_guard_disarm_keeps_active_client_and_meta_pid() {
     let dir = tempdir().unwrap();
     let meta_path = dir.path().join("m.json");
-    let meta_initial = fixture_meta(Some(4321));
+    let meta_initial = fixture_meta(vec![4321]);
     session::write_meta_atomic(&meta_path, &meta_initial).unwrap();
 
-    let (stream_a, _stream_b) = UnixStream::pair().unwrap();
-    let client = Arc::new(Mutex::new(stream_a));
-    let active_client: Mutex<Option<Arc<Mutex<UnixStream>>>> =
-        Mutex::new(Some(Arc::clone(&client)));
+    let (handle, _peer) = make_client_handle();
+    let mut map: HashMap<u32, ClientHandle> = HashMap::new();
+    map.insert(4321, handle);
+    let active_clients = Mutex::new(map);
     let meta_state = Mutex::new(meta_initial);
 
     {
         let mut guard = AttachStateGuard {
-            active_client: &active_client,
+            client_pid: 4321,
+            active_clients: &active_clients,
             meta: &meta_state,
             meta_path: &meta_path,
             armed: true,
@@ -82,32 +97,64 @@ fn attach_state_guard_disarm_keeps_active_client_and_meta_pid() {
         guard.disarm();
     }
 
-    assert!(active_client.lock().unwrap().is_some());
-    assert_eq!(meta_state.lock().unwrap().attached_client_pid, Some(4321));
+    assert!(active_clients.lock().unwrap().contains_key(&4321));
+    assert_eq!(meta_state.lock().unwrap().attached_client_pids, vec![4321]);
 }
 
 #[test]
 fn attach_state_guard_drop_when_armed_clears_client_and_persists_meta() {
     let dir = tempdir().unwrap();
     let meta_path = dir.path().join("m.json");
-    let meta_initial = fixture_meta(Some(4321));
+    let meta_initial = fixture_meta(vec![4321]);
     session::write_meta_atomic(&meta_path, &meta_initial).unwrap();
 
-    let (stream_a, _stream_b) = UnixStream::pair().unwrap();
-    let client = Arc::new(Mutex::new(stream_a));
-    let active_client: Mutex<Option<Arc<Mutex<UnixStream>>>> =
-        Mutex::new(Some(Arc::clone(&client)));
+    let (handle, _peer) = make_client_handle();
+    let mut map: HashMap<u32, ClientHandle> = HashMap::new();
+    map.insert(4321, handle);
+    let active_clients = Mutex::new(map);
     let meta_state = Mutex::new(meta_initial);
 
     drop(AttachStateGuard {
-        active_client: &active_client,
+        client_pid: 4321,
+        active_clients: &active_clients,
         meta: &meta_state,
         meta_path: &meta_path,
         armed: true,
     });
 
-    assert!(active_client.lock().unwrap().is_none());
-    assert_eq!(meta_state.lock().unwrap().attached_client_pid, None);
+    assert!(!active_clients.lock().unwrap().contains_key(&4321));
+    assert!(meta_state.lock().unwrap().attached_client_pids.is_empty());
     let persisted = session::read_meta(&meta_path).unwrap();
-    assert_eq!(persisted.attached_client_pid, None);
+    assert!(persisted.attached_client_pids.is_empty());
+}
+
+#[test]
+fn attach_state_guard_drop_only_removes_own_pid() {
+    // 複数clientが登録された状態で、自分のpidだけを外し他のclientはmap/metaに残す
+    let dir = tempdir().unwrap();
+    let meta_path = dir.path().join("m.json");
+    let meta_initial = fixture_meta(vec![100, 200]);
+    session::write_meta_atomic(&meta_path, &meta_initial).unwrap();
+
+    let (h100, _p100) = make_client_handle();
+    let (h200, _p200) = make_client_handle();
+    let mut map: HashMap<u32, ClientHandle> = HashMap::new();
+    map.insert(100, h100);
+    map.insert(200, h200);
+    let active_clients = Mutex::new(map);
+    let meta_state = Mutex::new(meta_initial);
+
+    drop(AttachStateGuard {
+        client_pid: 100,
+        active_clients: &active_clients,
+        meta: &meta_state,
+        meta_path: &meta_path,
+        armed: true,
+    });
+
+    let acl = active_clients.lock().unwrap();
+    assert!(!acl.contains_key(&100));
+    assert!(acl.contains_key(&200));
+    drop(acl);
+    assert_eq!(meta_state.lock().unwrap().attached_client_pids, vec![200]);
 }

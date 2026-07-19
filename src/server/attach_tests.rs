@@ -1,11 +1,10 @@
 use super::*;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use portable_pty::{PtySize, native_pty_system};
 use tempfile::tempdir;
@@ -26,14 +25,14 @@ fn fixture_meta() -> SessionMeta {
         last_attached_at: None,
         server_pid: 1,
         server_started_at: fixed,
-        attached_client_pid: None,
+        attached_client_pids: Vec::new(),
     }
 }
 
 #[test]
-fn handle_client_rejects_when_client_sends_non_hello() {
+fn handle_client_disconnects_when_client_sends_non_hello() {
     // 最初のメッセージがHello以外(ここではDetach)なら、handle_clientは無言でshutdownし
-    // HandleOutcome::Rejectedを返す。プロトコル違反を検知した経路のsmoke test
+    // HandleOutcome::Disconnectedを返す。プロトコル違反を検知した経路のsmoke test
     let (mut client, server) = UnixStream::pair().unwrap();
 
     // handle_client呼び出し前にkernel bufferへ書き込んでおくと、
@@ -48,11 +47,11 @@ fn handle_client_rejects_when_client_sends_non_hello() {
             pixel_height: 0,
         })
         .expect("openpty");
-    // Rejected経路ではwriter/masterへの実書き込みは発生しないので、writerはsinkでよい
-    let mut writer: Box<dyn Write + Send> = Box::new(io::sink());
+    // 拒否経路ではwriter/masterへの実書き込みは発生しないので、writerはsinkでよい
+    let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(io::sink())));
     let master: Mutex<Box<dyn MasterPty + Send>> = Mutex::new(pty.master);
 
-    let active_client: Mutex<Option<std::sync::Arc<Mutex<UnixStream>>>> = Mutex::new(None);
+    let active_clients: Mutex<HashMap<u32, ClientHandle>> = Mutex::new(HashMap::new());
     let scrollback: Mutex<VecDeque<u8>> = Mutex::new(VecDeque::new());
     let meta = Mutex::new(fixture_meta());
     let dir = tempdir().unwrap();
@@ -63,8 +62,8 @@ fn handle_client_rejects_when_client_sends_non_hello() {
     let outcome = handle_client(
         server,
         &master,
-        &mut writer,
-        &active_client,
+        &writer,
+        &active_clients,
         &scrollback,
         &meta,
         &meta_path,
@@ -73,10 +72,10 @@ fn handle_client_rejects_when_client_sends_non_hello() {
     )
     .expect("handle_client");
 
-    assert!(matches!(outcome, HandleOutcome::Rejected));
-    // Rejected時にサーバは状態を触らないこと(active_client未登録、meta.attached_client_pidそのまま)
-    assert!(active_client.lock().unwrap().is_none());
-    assert_eq!(meta.lock().unwrap().attached_client_pid, None);
+    assert!(matches!(outcome, HandleOutcome::Disconnected));
+    // 拒否時にサーバは状態を触らないこと(active_clients未登録、meta.attached_client_pidsそのまま)
+    assert!(active_clients.lock().unwrap().is_empty());
+    assert!(meta.lock().unwrap().attached_client_pids.is_empty());
     // meta_pathは書き込まれていない(HelloOk成功後にしか書かない)
     assert!(!meta_path.exists());
 

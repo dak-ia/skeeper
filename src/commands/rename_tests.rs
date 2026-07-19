@@ -15,7 +15,7 @@ fn sample_meta(id: Uuid, name: &str) -> session::SessionMeta {
         last_attached_at: None,
         server_pid: 0,
         server_started_at: OffsetDateTime::UNIX_EPOCH,
-        attached_client_pid: None,
+        attached_client_pids: Vec::new(),
     }
 }
 

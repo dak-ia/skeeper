@@ -19,7 +19,8 @@ pub struct SessionMeta {
     pub server_pid: u32,
     #[serde(with = "time::serde::rfc3339")]
     pub server_started_at: OffsetDateTime,
-    pub attached_client_pid: Option<u32>,
+    #[serde(default)]
+    pub attached_client_pids: Vec<u32>,
 }
 
 /// メタ情報を原子的にファイルに書き込む(tmpに書いてからrenameで置き換え)

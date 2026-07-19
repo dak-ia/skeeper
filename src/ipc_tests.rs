@@ -49,11 +49,6 @@ fn server_hello_ok_roundtrip() {
 }
 
 #[test]
-fn server_hello_error_roundtrip() {
-    roundtrip_server(&ServerMsg::HelloError(HelloErrorReason::AlreadyAttached));
-}
-
-#[test]
 fn server_stdout_roundtrip() {
     roundtrip_server(&ServerMsg::Stdout(vec![]));
     roundtrip_server(&ServerMsg::Stdout(vec![0, 1, 2, 0xff, b'\n']));

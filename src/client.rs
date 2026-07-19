@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use crossterm::terminal;
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 
-use crate::ipc::{self, ClientMsg, HelloErrorReason, ServerMsg};
+use crate::ipc::{self, ClientMsg, ServerMsg};
 use crate::term_guard::TerminalGuard;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -59,9 +59,6 @@ pub fn attach(socket_path: &Path) -> Result<()> {
     let response = ipc::read_server_msg(&mut stream)?;
     match response {
         ServerMsg::HelloOk { .. } => {}
-        ServerMsg::HelloError(HelloErrorReason::AlreadyAttached) => {
-            bail!("Another client is already attached to this session");
-        }
         other => bail!("Unexpected server response: {other:?}"),
     }
 
@@ -115,7 +112,7 @@ pub fn attach(socket_path: &Path) -> Result<()> {
             Ok(Ok(ServerMsg::SessionEnded { .. } | ServerMsg::DetachAck) | Err(_))
             | Err(RecvTimeoutError::Disconnected) => break,
             Ok(Ok(_)) | Err(RecvTimeoutError::Timeout) => {
-                // 予期しない応答は無視(ハンドシェイク後のHelloOk/HelloError等)、
+                // 予期しない応答は無視(ハンドシェイク後のHelloOk等)、
                 // タイムアウトは次のループでのSIGWINCHチェック用
             }
         }

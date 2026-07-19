@@ -17,13 +17,15 @@ pub use single::pick_session;
 /// pick_session / pick_sessions_multiで共通利用
 pub(super) fn session_line_text(s: &SessionMeta, offset: UtcOffset) -> String {
     let created = display::format_local(s.created_at, offset);
-    let state_label = if s.attached_client_pid.is_some() {
-        "attached"
-    } else {
-        "detached"
+    let n = s.attached_client_pids.len();
+    // 0=detached, 1=attached, 2以上=attached (N)。formatは複数client時のみ
+    let state_label: std::borrow::Cow<'_, str> = match n {
+        0 => "detached".into(),
+        1 => "attached".into(),
+        _ => format!("attached ({n})").into(),
     };
     let name_col = pad_or_truncate_display(&s.name, NAME_COL_WIDTH);
-    let state_col = pad_or_truncate_display(state_label, STATE_COL_WIDTH);
+    let state_col = pad_or_truncate_display(&state_label, STATE_COL_WIDTH);
     format!("{name_col}  {state_col}  {created}")
 }
 

@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::io::{self, Write};
+use std::io::Write;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -12,21 +13,21 @@ use anyhow::Result;
 use portable_pty::{MasterPty, PtySize};
 use time::OffsetDateTime;
 
-use crate::ipc::{self, ClientMsg, HelloErrorReason, ServerMsg};
+use crate::ipc::{self, ClientMsg, ServerMsg};
 use crate::session::{self, SessionMeta};
 
 use super::guards::AttachStateGuard;
 use super::{
-    DETACH_REQUESTED, HANDSHAKE_READ_TIMEOUT, HandleOutcome, POLL_INTERVAL, SOCKET_WRITE_TIMEOUT,
-    TERM_REQUESTED,
+    ClientEvent, ClientHandle, HANDSHAKE_READ_TIMEOUT, HandleOutcome, LAST_STDIN_CLIENT,
+    POLL_INTERVAL, SOCKET_WRITE_TIMEOUT, TERM_REQUESTED,
 };
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) fn handle_client(
     stream: UnixStream,
     master: &Mutex<Box<dyn MasterPty + Send>>,
-    writer: &mut Box<dyn Write + Send>,
-    active_client: &Mutex<Option<Arc<Mutex<UnixStream>>>>,
+    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
+    active_clients: &Mutex<HashMap<u32, ClientHandle>>,
     scrollback: &Mutex<VecDeque<u8>>,
     meta: &Mutex<SessionMeta>,
     meta_path: &Path,
@@ -34,9 +35,9 @@ pub(super) fn handle_client(
     child_status: &Mutex<Option<i32>>,
 ) -> Result<HandleOutcome> {
     // 3つのhandleを用意:
-    //   read_stream    : クライアント→サーバの読取り(handshake + attach内reader thread)
+    //   read_stream    : client→server読取り(handshake + attach内reader thread)
     //   shutdown_handle: Mutex外からshutdownするための独立clone(deadlock回避のキモ)
-    //   write_stream   : 書き込み共有(Arc<Mutex<>>でpty_readerとmainから)
+    //   write_stream   : 書き込み共有(Arc<Mutex<>>でsnapshot再生/PtyChunk配送/最終メッセージ全部から使う)
     let mut read_stream = stream.try_clone()?;
     let shutdown_handle = stream.try_clone()?;
     stream.set_write_timeout(Some(SOCKET_WRITE_TIMEOUT))?;
@@ -48,12 +49,10 @@ pub(super) fn handle_client(
 
     let Ok(hello) = ipc::read_client_msg(&mut read_stream) else {
         let _ = shutdown_handle.shutdown(Shutdown::Both);
-        return Ok(HandleOutcome::Rejected);
+        return Ok(HandleOutcome::Disconnected);
     };
 
-    // プロトコル違反(最初のメッセージがHelloではない)は、read失敗時と同様に無言でshutdownする。
-    // HelloErrorReasonにAlreadyAttached以外のvariantを追加してもクライアントに実装詳細を出すだけなので、
-    // 接続破棄で「異常なクライアント」を明確に切り離す方が扱いやすい
+    // プロトコル違反(最初のメッセージがHelloではない)は無言でshutdownする
     let ClientMsg::Hello {
         client_pid,
         cols,
@@ -61,19 +60,8 @@ pub(super) fn handle_client(
     } = hello
     else {
         let _ = shutdown_handle.shutdown(Shutdown::Both);
-        return Ok(HandleOutcome::Rejected);
+        return Ok(HandleOutcome::Disconnected);
     };
-
-    // 既に別クライアントが接続していれば拒否
-    let already_attached = { meta.lock().unwrap().attached_client_pid.is_some() };
-    if already_attached {
-        let _ = ipc::write_server_msg(
-            &mut *write_stream.lock().unwrap(),
-            &ServerMsg::HelloError(HelloErrorReason::AlreadyAttached),
-        );
-        let _ = shutdown_handle.shutdown(Shutdown::Both);
-        return Ok(HandleOutcome::Rejected);
-    }
 
     // 初期端末サイズを反映(clientが接続する前に済ませる)
     let _ = master.lock().unwrap().resize(PtySize {
@@ -83,9 +71,9 @@ pub(super) fn handle_client(
         pixel_height: 0,
     });
 
-    // ---- 順序の要: HelloOkを送信してからactive_clientを登録する ----
+    // ---- 順序の要: HelloOkを送信してからactive_clientsに登録する ----
     //   ・登録前に送るので、pty_readerがStdoutを差し込む余地がない
-    //   ・HelloOk送信失敗ならmeta/active_clientは触らずreturn(状態リーク無し)
+    //   ・HelloOk送信失敗ならmeta/active_clientsは触らずreturn(状態リーク無し)
     let (session_id, name) = {
         let m = meta.lock().unwrap();
         (m.id, m.name.clone())
@@ -100,81 +88,103 @@ pub(super) fn handle_client(
         return Ok(HandleOutcome::Disconnected);
     }
 
-    // ---- スクロールバック再生 + active_client登録(atomic) ----
-    // scrollback + active_clientの両ロックを同時に握ることで:
-    //   ・pty_reader_loopは(同じ順序で)ロック取得待ちで進めない
-    //   ・「scrollback読み出し → クライアントに送信 → active_client登録」を割り込みなしで一連に行える
-    // 副作用: 再生中(数十ms)はpty出力がkernel bufferで詰まるが、shellが一時的に停滞するだけで実害なし
-    {
+    let should_detach = Arc::new(AtomicBool::new(false));
+    // client読み取り・pty出力の両方をこのchannelに集めてattached_loopで処理する
+    let (event_tx, event_rx) = mpsc::channel::<ClientEvent>();
+
+    // ---- scrollback snapshot + active_clients登録(atomic) ----
+    // scrollback + active_clientsの両ロック中に「snapshotコピー + self挿入」を一気に済ませる。
+    // ロック解放後の実際のsocket書き込みは外に出しているので、遅いclientでも
+    // active_clientsとscrollbackは長時間ブロックしない
+    let snapshot: Vec<u8> = {
         let sb = scrollback.lock().unwrap();
-        let mut acl = active_client.lock().unwrap();
-
-        if !sb.is_empty() {
-            let bytes: Vec<u8> = sb.iter().copied().collect();
-            let send_res = {
-                let mut w = write_stream.lock().unwrap();
-                ipc::write_server_msg(&mut *w, &ServerMsg::Stdout(bytes))
-            };
-            if send_res.is_err() {
-                drop(acl);
-                drop(sb);
-                let _ = shutdown_handle.shutdown(Shutdown::Both);
-                return Ok(HandleOutcome::Disconnected);
-            }
-        }
-
-        // meta.attached_client_pid=Someを書く前にフラグをクリアする。
-        // クリア後の書き込みで、client側の「メタでattached確認 → ctl送信」経路のフラグは
-        // このattachに対する信号として取りこぼしなく検知される
-        DETACH_REQUESTED.store(false, Ordering::Release);
-        *acl = Some(Arc::clone(&write_stream));
-    }
+        let mut acl = active_clients.lock().unwrap();
+        let snap: Vec<u8> = sb.iter().copied().collect();
+        acl.insert(
+            client_pid,
+            ClientHandle {
+                should_detach: Arc::clone(&should_detach),
+                event_tx: event_tx.clone(),
+            },
+        );
+        snap
+    };
 
     // ---- メタ更新(以降の早期returnはguardが後始末) ----
     {
         let mut m = meta.lock().unwrap();
-        m.attached_client_pid = Some(client_pid);
+        if !m.attached_client_pids.contains(&client_pid) {
+            m.attached_client_pids.push(client_pid);
+        }
         m.last_attached_at = Some(OffsetDateTime::now_utc());
         let _ = session::write_meta_atomic(meta_path, &m);
     }
     let mut attach_guard = AttachStateGuard {
-        active_client,
+        client_pid,
+        active_clients,
         meta,
         meta_path,
         armed: true,
     };
 
-    // ---- attach中の読み取りは別スレッド、mainはmpscで受ける ----
+    // ---- snapshot送信(両ロック外) ----
+    // ロック解放後にpty_readerが送ってくるPtyChunkはevent_rxに積まれる。
+    // ここでsnapshotをまず送ってから下のloopに入るので、client視点の順序は
+    // snapshot → PtyChunk...となり、シェル出力の時系列が保たれる
+    if !snapshot.is_empty() {
+        let send_res = ipc::write_server_msg(
+            &mut *write_stream.lock().unwrap(),
+            &ServerMsg::Stdout(snapshot),
+        );
+        if send_res.is_err() {
+            // guardがactive_clients/metaを掃除する
+            let _ = shutdown_handle.shutdown(Shutdown::Both);
+            return Ok(HandleOutcome::Disconnected);
+        }
+    }
+
+    // ---- attach中の読み取りは別スレッド、attached_loopがeventを一元処理する ----
     read_stream.set_read_timeout(None)?;
-    let (msg_tx, msg_rx) = mpsc::channel::<io::Result<ClientMsg>>();
+    let reader_tx = event_tx.clone();
     let reader_handle = thread::spawn(move || {
         let mut r = read_stream;
         loop {
             match ipc::read_client_msg(&mut r) {
                 Ok(m) => {
-                    if msg_tx.send(Ok(m)).is_err() {
+                    if reader_tx.send(ClientEvent::ClientMsg(Ok(m))).is_err() {
                         break;
                     }
                 }
                 Err(e) => {
-                    let _ = msg_tx.send(Err(e));
+                    let _ = reader_tx.send(ClientEvent::ClientMsg(Err(e)));
                     break;
                 }
             }
         }
     });
 
-    let outcome = attached_loop(writer, master, &msg_rx, child_exited);
+    let outcome = attached_loop(
+        writer,
+        master,
+        &write_stream,
+        &event_rx,
+        child_exited,
+        &should_detach,
+        client_pid,
+    );
 
-    // ---- 順序の要: 先にactive_client=Noneにしてin-flight pty_reader書き込みを絞る ----
-    // pty_reader_loopはouter lockを保持したまま書くので、
-    // ここでlockを取れる時点で「in-flight書き込みは既に終わっている」
-    // 以降のpty_reader iterationはNoneを見てStdoutを送らなくなる
+    // ---- 順序の要: 先にactive_clientsから外してpty_readerのfanout先を絞る ----
+    // pty_readerはacl lockを取ってsend、send失敗pidは事後掃除の設計なので、
+    // ここでlockを取れた時点で「in-flight sendは既に終わっている」
+    // 以降のpty_reader iterationは自clientをmapに見つけずPtyChunkを送らない
     attach_guard.disarm();
-    *active_client.lock().unwrap() = None;
+    {
+        let mut acl = active_clients.lock().unwrap();
+        acl.remove(&client_pid);
+    }
     {
         let mut m = meta.lock().unwrap();
-        m.attached_client_pid = None;
+        m.attached_client_pids.retain(|&p| p != client_pid);
         let _ = session::write_meta_atomic(meta_path, &m);
     }
 
@@ -184,7 +194,7 @@ pub(super) fn handle_client(
         HandleOutcome::ChildExited => Some(ServerMsg::SessionEnded {
             exit_status: *child_status.lock().unwrap(),
         }),
-        HandleOutcome::Disconnected | HandleOutcome::Rejected => None,
+        HandleOutcome::Disconnected => None,
     };
     if let Some(msg) = final_msg {
         let _ = ipc::write_server_msg(&mut *write_stream.lock().unwrap(), &msg);
@@ -197,31 +207,38 @@ pub(super) fn handle_client(
     Ok(outcome)
 }
 
-/// attach中のイベントdispatch。最終メッセージ送信・active_client解除はここではやらない
+/// attach中のイベントdispatch。event_rxからClientMsg / PtyChunkを受けて処理する。
+/// 最終メッセージ送信・active_clients解除はここではやらない
 /// (handle_client側で「先に登録解除→最後にDetachAck/SessionEnded」の順序を守るため)
+#[allow(clippy::too_many_arguments)]
 fn attached_loop(
-    writer: &mut Box<dyn Write + Send>,
+    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     master: &Mutex<Box<dyn MasterPty + Send>>,
-    msg_rx: &mpsc::Receiver<io::Result<ClientMsg>>,
+    write_stream: &Arc<Mutex<UnixStream>>,
+    event_rx: &mpsc::Receiver<ClientEvent>,
     child_exited: &AtomicBool,
+    should_detach: &AtomicBool,
+    self_pid: u32,
 ) -> HandleOutcome {
     loop {
         if child_exited.load(Ordering::Acquire) || TERM_REQUESTED.load(Ordering::Acquire) {
             return HandleOutcome::ChildExited;
         }
-        // 制御ソケット経由のdetach要求。swapでフラグを消費して次周に持ち越さない
-        if DETACH_REQUESTED.swap(false, Ordering::AcqRel) {
+        // 制御ソケット経由のdetach要求。ここでフラグを消費して次周に持ち越さない
+        if should_detach.swap(false, Ordering::AcqRel) {
             return HandleOutcome::Detached;
         }
 
-        match msg_rx.recv_timeout(POLL_INTERVAL) {
-            Ok(Ok(ClientMsg::Stdin(bytes))) => {
-                if writer.write_all(&bytes).is_err() {
+        match event_rx.recv_timeout(POLL_INTERVAL) {
+            Ok(ClientEvent::ClientMsg(Ok(ClientMsg::Stdin(bytes)))) => {
+                LAST_STDIN_CLIENT.store(self_pid, Ordering::Release);
+                let mut w = writer.lock().unwrap();
+                if w.write_all(&bytes).is_err() {
                     return HandleOutcome::Disconnected;
                 }
-                let _ = writer.flush();
+                let _ = w.flush();
             }
-            Ok(Ok(ClientMsg::Resize { cols, rows })) => {
+            Ok(ClientEvent::ClientMsg(Ok(ClientMsg::Resize { cols, rows }))) => {
                 let _ = master.lock().unwrap().resize(PtySize {
                     cols,
                     rows,
@@ -229,16 +246,24 @@ fn attached_loop(
                     pixel_height: 0,
                 });
             }
-            Ok(Ok(ClientMsg::Detach)) => {
+            Ok(ClientEvent::ClientMsg(Ok(ClientMsg::Detach))) => {
                 return HandleOutcome::Detached;
             }
-            Ok(Ok(ClientMsg::Hello { .. })) | Err(RecvTimeoutError::Timeout) => {
-                // handshake後の予期しないHelloは無視、
-                // タイムアウトはループ先頭の子プロセス終了チェックへ戻るだけ
+            Ok(ClientEvent::PtyChunk(bytes)) => {
+                // Arcで共有されたchunkをclient socketに書く。ここでの遅延は当該clientだけに影響し、
+                // pty_readerや他clientのfanoutは詰まらない(mpsc unboundedのため)
+                let mut w = write_stream.lock().unwrap();
+                if ipc::write_server_msg(&mut *w, &ServerMsg::Stdout((*bytes).clone())).is_err() {
+                    return HandleOutcome::Disconnected;
+                }
             }
-            Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
+            Ok(ClientEvent::ClientMsg(Err(_))) | Err(RecvTimeoutError::Disconnected) => {
                 return HandleOutcome::Disconnected;
             }
+            // handshake後の予期しないHelloとタイムアウトは同じ扱い:
+            // ループ先頭の子プロセス終了/detachチェックへ戻るだけ
+            Ok(ClientEvent::ClientMsg(Ok(ClientMsg::Hello { .. })))
+            | Err(RecvTimeoutError::Timeout) => {}
         }
     }
 }

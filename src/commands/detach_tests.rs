@@ -3,7 +3,7 @@ use super::*;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn sample_meta(id: Uuid, attached_client_pid: Option<u32>) -> session::SessionMeta {
+fn sample_meta(id: Uuid, attached_client_pids: Vec<u32>) -> session::SessionMeta {
     session::SessionMeta {
         id,
         name: "test".to_string(),
@@ -13,7 +13,7 @@ fn sample_meta(id: Uuid, attached_client_pid: Option<u32>) -> session::SessionMe
         last_attached_at: None,
         server_pid: 0,
         server_started_at: OffsetDateTime::UNIX_EPOCH,
-        attached_client_pid,
+        attached_client_pids,
     }
 }
 
@@ -40,7 +40,8 @@ fn run_errors_when_no_client_is_attached() {
     std::fs::create_dir_all(&base).unwrap();
 
     let id = Uuid::from_u128(0xdead_beef);
-    session::write_meta_atomic(&paths::meta_path(&base, &id), &sample_meta(id, None)).unwrap();
+    session::write_meta_atomic(&paths::meta_path(&base, &id), &sample_meta(id, Vec::new()))
+        .unwrap();
 
     unsafe {
         std::env::set_var("SKEEPER_SESSION_ID", id.to_string());

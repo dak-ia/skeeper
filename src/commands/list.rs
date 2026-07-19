@@ -1,6 +1,8 @@
 use crate::text::pad_or_truncate_display;
 use crate::{display, paths, session};
 
+const STATE_COL_WIDTH: usize = 13;
+
 pub(crate) fn run() -> anyhow::Result<()> {
     let base_dir = paths::runtime_dir()?;
     let mut sessions = session::list_all_meta(&base_dir).unwrap_or_default();
@@ -21,7 +23,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         "{id}  {name}  {state}  {created}  {last}  CWD",
         id = pad_or_truncate_display("ID", 8),
         name = pad_or_truncate_display("NAME", 20),
-        state = pad_or_truncate_display("STATE", 8),
+        state = pad_or_truncate_display("STATE", STATE_COL_WIDTH),
         created = pad_or_truncate_display("CREATED", 19),
         last = pad_or_truncate_display("LAST ATTACHED", 19),
     );
@@ -45,7 +47,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             "{id}  {name}  {state}  {created}  {last}  {cwd}",
             id = id_short,
             name = pad_or_truncate_display(&s.name, 20),
-            state = pad_or_truncate_display(&state_label, 8),
+            state = pad_or_truncate_display(&state_label, STATE_COL_WIDTH),
             created = pad_or_truncate_display(&created, 19),
             last = pad_or_truncate_display(&last_attached, 19),
         );

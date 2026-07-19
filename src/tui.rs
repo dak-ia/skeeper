@@ -5,7 +5,7 @@ use crate::session::SessionMeta;
 use crate::text::pad_or_truncate_display;
 
 const NAME_COL_WIDTH: usize = 24;
-const STATE_COL_WIDTH: usize = 8;
+const STATE_COL_WIDTH: usize = 13;
 
 mod multi;
 mod single;

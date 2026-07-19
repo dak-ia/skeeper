@@ -13,7 +13,7 @@ fn make_session(name: &str, attached: bool) -> SessionMeta {
         last_attached_at: None,
         server_pid: 12345,
         server_started_at: datetime!(2000-01-02 03:04:05 UTC),
-        attached_client_pid: if attached { Some(1) } else { None },
+        attached_client_pids: if attached { vec![1] } else { Vec::new() },
     }
 }
 

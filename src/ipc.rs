@@ -25,15 +25,9 @@ pub enum ClientMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerMsg {
     HelloOk { session_id: Uuid, name: String },
-    HelloError(HelloErrorReason),
     Stdout(Vec<u8>),
     DetachAck,
     SessionEnded { exit_status: Option<i32> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum HelloErrorReason {
-    AlreadyAttached,
 }
 
 /// 制御ソケット(<uuid>.ctl)経由でサーバに送るメッセージ。データ用socketとは別

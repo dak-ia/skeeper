@@ -1,9 +1,10 @@
-use std::collections::VecDeque;
-use std::io;
+use std::collections::{HashMap, VecDeque};
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -52,18 +53,32 @@ pub(super) type Scrollback = Arc<Mutex<VecDeque<u8>>>;
 /// SIGTERM/SIGINTを受けたときに立てるフラグ。メインループが検知して掃除経路へ入る
 pub(super) static TERM_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// 制御ソケット経由でRequestDetachを受けたら立てるフラグ。attached_loopが検知して
-/// 通常のdetach経路に合流する。single-session server前提のstatic
-pub(super) static DETACH_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// 直近stdinを送ったclientのpid。control socket経由のRequestDetachで対象を決めるために使う。
+/// 0は「まだ誰もstdin送っていない」を意味する。single-session server前提のstatic
+pub(super) static LAST_STDIN_CLIENT: AtomicU32 = AtomicU32::new(0);
+
+/// attached_loopに配送するイベント。client読み取りとpty出力を1つのchannelで受けて、
+/// pty_reader_loopが個別clientのwriteをブロックしないようにする
+pub(super) enum ClientEvent {
+    /// clientから届いたメッセージ(またはread失敗)
+    ClientMsg(io::Result<crate::ipc::ClientMsg>),
+    /// pty_reader_loopが読み取ったptyのchunk。Arcで包んで全client向けに共有する
+    PtyChunk(Arc<Vec<u8>>),
+}
+
+/// 接続中の各clientについて、pty出力を積むevent送信口と個別detachシグナルを持つ。
+/// streamはattached_loopが自前で保持しているのでここには入れない
+pub(super) struct ClientHandle {
+    pub(super) should_detach: Arc<AtomicBool>,
+    pub(super) event_tx: mpsc::Sender<ClientEvent>,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum HandleOutcome {
-    /// クライアントが自発的にdetachした。次のattach待ちに戻る
+    /// クライアントが自発的にdetachした
     Detached,
-    /// クライアントとの接続が意図せず切れた。次のattach待ちに戻る
+    /// クライアントとの接続が意図せず切れた
     Disconnected,
-    /// クライアントが不正/衝突で拒否された。次のattach待ちに戻る
-    Rejected,
     /// ptyの子プロセスが終了した / SIGTERMが要求された。サーバも終了する
     ChildExited,
 }
@@ -100,7 +115,7 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
 
     // サーバ起動時にstaticフラグを初期化(前回のプロセスからの影響を避ける、defensive)
     TERM_REQUESTED.store(false, Ordering::Release);
-    DETACH_REQUESTED.store(false, Ordering::Release);
+    LAST_STDIN_CLIENT.store(0, Ordering::Release);
 
     // 同じUUIDで残っているstaleなソケットがあれば除去
     let _ = std::fs::remove_file(&socket_path);
@@ -151,7 +166,7 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
         last_attached_at: None,
         server_pid: self_pid,
         server_started_at: self_started_at,
-        attached_client_pid: None,
+        attached_client_pids: Vec::new(),
     };
     session::write_meta_atomic(&meta_path, &meta_initial)?;
 
@@ -164,10 +179,11 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
         .master
         .take_writer()
         .map_err(|e| anyhow!("Failed to take pty writer: {e}"))?;
-    let master: Mutex<Box<dyn MasterPty + Send>> = Mutex::new(pty_pair.master);
+    let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(pty_pair.master));
 
     // 共有状態
-    let active_client: Arc<Mutex<Option<Arc<Mutex<UnixStream>>>>> = Arc::new(Mutex::new(None));
+    let active_clients: Arc<Mutex<HashMap<u32, ClientHandle>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     // metaはcontrol_listener_loop(別スレッド)からもrename処理で書き換えるためArc
     let meta: Arc<Mutex<SessionMeta>> = Arc::new(Mutex::new(meta_initial));
     let child_exited = Arc::new(AtomicBool::new(false));
@@ -175,19 +191,24 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
     // スクロールバック: pty出力の直近ぶんを保持し、新規attach時に再生する
     let scrollback: Scrollback =
         Arc::new(Mutex::new(VecDeque::with_capacity(SCROLLBACK_MAX_BYTES)));
+    // writerも複数client threadから同時書き込みされるためArc<Mutex<>>で共有する
+    let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(master_writer));
 
-    // 制御ソケットの受付スレッド(meta/meta_pathを共有)
+    // 制御ソケットの受付スレッド(active_clients/meta/meta_pathを共有)
     {
+        let active_clients = Arc::clone(&active_clients);
         let meta = Arc::clone(&meta);
         let meta_path_owned = meta_path.clone();
-        thread::spawn(move || control_listener_loop(&ctl_listener, &meta, &meta_path_owned));
+        thread::spawn(move || {
+            control_listener_loop(&ctl_listener, &active_clients, &meta, &meta_path_owned);
+        });
     }
 
-    // 常時実行のバックグラウンドスレッド: ptyのstdoutを読んで、接続中のクライアントへ流す
+    // 常時実行のバックグラウンドスレッド: ptyのstdoutを読んで、接続中の全クライアントへfanout
     {
-        let active_client = Arc::clone(&active_client);
+        let active_clients = Arc::clone(&active_clients);
         let scrollback = Arc::clone(&scrollback);
-        thread::spawn(move || pty_reader_loop(master_reader, active_client, scrollback));
+        thread::spawn(move || pty_reader_loop(master_reader, active_clients, scrollback));
     }
 
     // 常時実行のバックグラウンドスレッド: 子プロセス終了を監視して exit code を保存
@@ -205,30 +226,37 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
         });
     }
 
-    // メインの受付ループ
-    let mut writer = master_writer;
+    // メインの受付ループ(1接続=1thread)
     loop {
         if child_exited.load(Ordering::Acquire) || TERM_REQUESTED.load(Ordering::Acquire) {
             break;
         }
         match listener.accept() {
             Ok((stream, _)) => {
-                let outcome = handle_client(
-                    stream,
-                    &master,
-                    &mut writer,
-                    &active_client,
-                    &scrollback,
-                    &meta,
-                    &meta_path,
-                    &child_exited,
-                    &child_status,
-                );
-                match outcome {
-                    Ok(HandleOutcome::ChildExited) => break,
-                    Ok(_) => (),
-                    Err(e) => eprintln!("client handling error: {e:#}"),
-                }
+                let master = Arc::clone(&master);
+                let writer = Arc::clone(&writer);
+                let active_clients = Arc::clone(&active_clients);
+                let scrollback = Arc::clone(&scrollback);
+                let meta = Arc::clone(&meta);
+                let meta_path = meta_path.clone();
+                let child_exited = Arc::clone(&child_exited);
+                let child_status = Arc::clone(&child_status);
+                thread::spawn(move || {
+                    match handle_client(
+                        stream,
+                        &master,
+                        &writer,
+                        &active_clients,
+                        &scrollback,
+                        &meta,
+                        &meta_path,
+                        &child_exited,
+                        &child_status,
+                    ) {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("client handling error: {e:#}"),
+                    }
+                });
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(POLL_INTERVAL);

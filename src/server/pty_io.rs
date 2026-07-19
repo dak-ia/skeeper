@@ -1,22 +1,15 @@
+use std::collections::HashMap;
 use std::io::Read;
-use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 
-use crate::ipc::{self, ServerMsg};
-
-use super::{PTY_BUF_SIZE, SCROLLBACK_MAX_BYTES, Scrollback};
+use super::{ClientEvent, ClientHandle, PTY_BUF_SIZE, SCROLLBACK_MAX_BYTES, Scrollback};
 
 /// ptyのstdoutを読み続けるバックグラウンドスレッド。
-/// 接続中のクライアントに対してのみStdoutを書き出し、同時にscrollback bufferにも溜める。
-///
-/// scrollbackへの追記からactive_clientへの書き込みまで、両ロックを保持したまま実行する。
-/// 途中で新規attach側(handle_client)が同じ順で両ロックを取ろうとしても、pty_reader側の
-/// 処理が終わってから割り込むため、scrollback replay直後にpty_reader由来の同一chunkが
-/// 二重配信されるレースを防いでいる
+/// 接続中の全clientにfanoutと、scrollback bufferへの追記をまとめて行う。
 #[allow(clippy::needless_pass_by_value)] // スレッド生存期間 = Arc所有期間として意図的
 pub(super) fn pty_reader_loop(
     mut reader: Box<dyn Read + Send>,
-    active_client: Arc<Mutex<Option<Arc<Mutex<UnixStream>>>>>,
+    active_clients: Arc<Mutex<HashMap<u32, ClientHandle>>>,
     scrollback: Scrollback,
 ) {
     let mut buf = [0u8; PTY_BUF_SIZE];
@@ -34,16 +27,30 @@ pub(super) fn pty_reader_loop(
                 }
                 sb.extend(&buf[..n]);
 
-                // active_client登録の途中に割り込まれると、attach側がscrollback replay直後に
-                // 同じchunkをpty_readerから受け取ることになる。scrollbackを持ったままaclを取る
-                let guard = active_client.lock().unwrap();
-                if let Some(ref s) = *guard {
-                    let msg = ServerMsg::Stdout(buf[..n].to_vec());
-                    if let Ok(mut w) = s.lock() {
-                        let _ = ipc::write_server_msg(&mut *w, &msg);
+                // fanout: 1つのVecをArcで共有し、各clientのchannelにclone senderで送る。
+                // send自体は非blocking(unbounded channel)なので、1台のattached_loopが
+                // 遅くても他のclientやscrollback更新はここで止まらない。
+                let chunk = Arc::new(buf[..n].to_vec());
+                let guard = active_clients.lock().unwrap();
+                let mut failed: Vec<u32> = Vec::new();
+                for (pid, handle) in guard.iter() {
+                    // send失敗はattached_loopがすでに終わっている(Receiver drop)ケース。
+                    // pidを覚えておいて後でmapから外し、以降のfanoutを絞る
+                    if handle
+                        .event_tx
+                        .send(ClientEvent::PtyChunk(Arc::clone(&chunk)))
+                        .is_err()
+                    {
+                        failed.push(*pid);
                     }
                 }
                 drop(guard);
+                if !failed.is_empty() {
+                    let mut guard = active_clients.lock().unwrap();
+                    for pid in failed {
+                        guard.remove(&pid);
+                    }
+                }
                 drop(sb);
             }
         }

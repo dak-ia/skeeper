@@ -32,10 +32,12 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let last_attached = s
             .last_attached_at
             .map_or_else(|| "-".to_string(), |t| display::format_local(t, offset));
-        let state_label = if s.attached_client_pid.is_some() {
-            "attached"
-        } else {
-            "detached"
+        let n = s.attached_client_pids.len();
+        // 0=detached, 1=attached, 2以上=attached (N)。formatは複数client時のみ
+        let state_label: std::borrow::Cow<'_, str> = match n {
+            0 => "detached".into(),
+            1 => "attached".into(),
+            _ => format!("attached ({n})").into(),
         };
         let cwd = s.cwd.to_string_lossy();
 
@@ -43,7 +45,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             "{id}  {name}  {state}  {created}  {last}  {cwd}",
             id = id_short,
             name = pad_or_truncate_display(&s.name, 20),
-            state = pad_or_truncate_display(state_label, 8),
+            state = pad_or_truncate_display(&state_label, 8),
             created = pad_or_truncate_display(&created, 19),
             last = pad_or_truncate_display(&last_attached, 19),
         );

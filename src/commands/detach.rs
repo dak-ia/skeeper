@@ -13,11 +13,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
         anyhow::bail!("Must be run inside a skeeper session");
     };
 
-    // 接続中でないときに送るとサーバ側でフラグだけ残って次回attach即detachになる。
-    // クライアント側でも防御しておく(サーバ側でもattach開始時にリセットする)
+    // 接続中でないときに送っても現在はserver側で無視されるが、
+    // ユーザーに「detach対象がない」ことを早めに伝えるためclient側でもチェックする
     let meta_path = paths::meta_path(&base_dir, &session_id);
     let meta = session::read_meta(&meta_path).context("Failed to read session metadata")?;
-    if meta.attached_client_pid.is_none() {
+    if meta.attached_client_pids.is_empty() {
         anyhow::bail!("No client is currently attached");
     }
 

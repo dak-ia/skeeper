@@ -11,7 +11,7 @@ fn sample() -> SessionMeta {
         last_attached_at: Some(datetime!(2026-07-04 13:00:00 UTC)),
         server_pid: 12345,
         server_started_at: datetime!(2026-07-04 12:34:56.789012345 UTC),
-        attached_client_pid: None,
+        attached_client_pids: Vec::new(),
     }
 }
 
@@ -39,10 +39,10 @@ fn preserves_nanosecond_precision() {
 fn nulls_optionals_when_none() {
     let mut m = sample();
     m.last_attached_at = None;
-    m.attached_client_pid = None;
+    m.attached_client_pids = Vec::new();
     let json = serde_json::to_string(&m).unwrap();
     assert!(json.contains("\"last_attached_at\":null"));
-    assert!(json.contains("\"attached_client_pid\":null"));
+    assert!(json.contains("\"attached_client_pids\":[]"));
 }
 
 #[test]
@@ -144,7 +144,7 @@ mod orphan_tests {
             last_attached_at: None,
             server_pid: self_pid,
             server_started_at: start,
-            attached_client_pid: None,
+            attached_client_pids: Vec::new(),
         }
     }
 

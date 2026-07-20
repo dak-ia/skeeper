@@ -53,6 +53,9 @@ fn fans_out_pty_chunks_to_all_client_channels() {
     map.insert(
         11,
         ClientHandle {
+            attach_id: 1,
+            cols: 80,
+            rows: 24,
             should_detach: Arc::new(AtomicBool::new(false)),
             event_tx: tx1,
         },
@@ -60,6 +63,9 @@ fn fans_out_pty_chunks_to_all_client_channels() {
     map.insert(
         22,
         ClientHandle {
+            attach_id: 1,
+            cols: 80,
+            rows: 24,
             should_detach: Arc::new(AtomicBool::new(false)),
             event_tx: tx2,
         },
@@ -100,6 +106,9 @@ fn removes_client_whose_channel_receiver_is_dropped() {
     map.insert(
         1,
         ClientHandle {
+            attach_id: 1,
+            cols: 80,
+            rows: 24,
             should_detach: Arc::new(AtomicBool::new(false)),
             event_tx: tx_alive,
         },
@@ -107,6 +116,9 @@ fn removes_client_whose_channel_receiver_is_dropped() {
     map.insert(
         2,
         ClientHandle {
+            attach_id: 1,
+            cols: 80,
+            rows: 24,
             should_detach: Arc::new(AtomicBool::new(false)),
             event_tx: tx_dead,
         },

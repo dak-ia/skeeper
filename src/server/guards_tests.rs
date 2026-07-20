@@ -30,6 +30,9 @@ fn fixture_meta(attached_pids: Vec<u32>) -> SessionMeta {
 fn make_client_handle() -> (ClientHandle, mpsc::Receiver<ClientEvent>) {
     let (event_tx, event_rx) = mpsc::channel::<ClientEvent>();
     let handle = ClientHandle {
+        attach_id: 1,
+        cols: 80,
+        rows: 24,
         should_detach: Arc::new(AtomicBool::new(false)),
         event_tx,
     };
@@ -89,9 +92,11 @@ fn attach_state_guard_disarm_keeps_active_client_and_meta_pid() {
     {
         let mut guard = AttachStateGuard {
             client_pid: 4321,
+            attach_id: 1,
             active_clients: &active_clients,
             meta: &meta_state,
             meta_path: &meta_path,
+            master: None,
             armed: true,
         };
         guard.disarm();
@@ -116,9 +121,11 @@ fn attach_state_guard_drop_when_armed_clears_client_and_persists_meta() {
 
     drop(AttachStateGuard {
         client_pid: 4321,
+        attach_id: 1,
         active_clients: &active_clients,
         meta: &meta_state,
         meta_path: &meta_path,
+        master: None,
         armed: true,
     });
 
@@ -126,6 +133,47 @@ fn attach_state_guard_drop_when_armed_clears_client_and_persists_meta() {
     assert!(meta_state.lock().unwrap().attached_client_pids.is_empty());
     let persisted = session::read_meta(&meta_path).unwrap();
     assert!(persisted.attached_client_pids.is_empty());
+}
+
+#[test]
+fn attach_state_guard_drop_skips_when_attach_id_mismatched() {
+    // 同一pidで新しいattachに置換された(attach_idが更新済み)状況を再現。
+    // 古い側のguard dropはslotを他者所有と判定してmap/metaを触らないべき
+    let dir = tempdir().unwrap();
+    let meta_path = dir.path().join("m.json");
+    let meta_initial = fixture_meta(vec![7777]);
+    session::write_meta_atomic(&meta_path, &meta_initial).unwrap();
+
+    let (new_handle, _peer) = make_client_handle();
+    // 新attachはattach_id=2、guardは古いattach_id=1を持って落ちる
+    let mut map: HashMap<u32, ClientHandle> = HashMap::new();
+    map.insert(
+        7777,
+        ClientHandle {
+            attach_id: 2,
+            ..new_handle
+        },
+    );
+    let active_clients = Mutex::new(map);
+    let meta_state = Mutex::new(meta_initial);
+
+    drop(AttachStateGuard {
+        client_pid: 7777,
+        attach_id: 1,
+        active_clients: &active_clients,
+        meta: &meta_state,
+        meta_path: &meta_path,
+        master: None,
+        armed: true,
+    });
+
+    // slotは新attach所有のまま残り、meta_pids も削除されない
+    assert!(active_clients.lock().unwrap().contains_key(&7777));
+    assert_eq!(
+        meta_state.lock().unwrap().attached_client_pids,
+        vec![7777],
+        "attach_id不一致でmeta_pidsも変更されないこと"
+    );
 }
 
 #[test]
@@ -146,9 +194,11 @@ fn attach_state_guard_drop_only_removes_own_pid() {
 
     drop(AttachStateGuard {
         client_pid: 100,
+        attach_id: 1,
         active_clients: &active_clients,
         meta: &meta_state,
         meta_path: &meta_path,
+        master: None,
         armed: true,
     });
 

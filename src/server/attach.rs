@@ -63,7 +63,6 @@ pub(super) fn handle_client(
         return Ok(HandleOutcome::Disconnected);
     };
 
-
     // ---- 順序の要: HelloOkを送信してからactive_clientsに登録する ----
     //   ・登録前に送るので、pty_readerがStdoutを差し込む余地がない
     //   ・HelloOk送信失敗ならmeta/active_clientsは触らずreturn(状態リーク無し)

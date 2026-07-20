@@ -42,6 +42,9 @@ fn make_client_handle() -> (ClientHandle, Arc<AtomicBool>, mpsc::Receiver<Client
     let should_detach = Arc::new(AtomicBool::new(false));
     let (event_tx, event_rx) = mpsc::channel::<ClientEvent>();
     let handle = ClientHandle {
+        attach_id: 1,
+        cols: 80,
+        rows: 24,
         should_detach: Arc::clone(&should_detach),
         event_tx,
     };

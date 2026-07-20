@@ -1,16 +1,19 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Pid, fork};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::cli::NewArgs;
 use crate::server::{self, ServerRunArgs};
-use crate::{client, name_gen, paths, session};
+use crate::session::SessionMeta;
+use crate::{client, name_gen, paths, runtime_lock, session};
 
 use super::current_session_id;
 
@@ -18,32 +21,69 @@ const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(3);
 const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(crate) fn run(args: NewArgs) -> anyhow::Result<()> {
+    let NewArgs {
+        name: requested_name,
+        detached,
+        shell: shell_arg,
+        cwd: cwd_arg,
+    } = args;
+
     let base_dir = paths::runtime_dir()?;
-    std::fs::create_dir_all(&base_dir)?;
+    paths::ensure_runtime_dir(&base_dir)?;
 
     if current_session_id(&base_dir).is_some() {
         anyhow::bail!("Already inside a session. Run `skeeper d` to detach first");
     }
 
-    let shell = resolve_shell(
-        args.shell.as_deref(),
-        std::env::var("SHELL").ok().as_deref(),
-    );
-    let cwd = std::env::current_dir().context("Failed to get current directory")?;
-    let name = args
-        .name
-        .unwrap_or_else(|| name_gen::random_name(&mut rand::rng()));
-
-    // 名前衝突チェック(list_all_metaはパース失敗を黙って飛ばすのでunwrap_or_defaultで十分)
-    let existing = session::list_all_meta(&base_dir).unwrap_or_default();
-    if existing.iter().any(|m| m.name == name) {
-        anyhow::bail!(
-            "Session name '{name}' is already in use. Run `skeeper attach {name}` to attach"
-        );
-    }
+    let shell = resolve_shell(shell_arg.as_deref(), std::env::var("SHELL").ok().as_deref());
+    let current = std::env::current_dir().context("Failed to get current directory")?;
+    let cwd = resolve_cwd(cwd_arg.as_deref(), &current)?;
 
     let session_id = Uuid::new_v4();
+    let meta_path = paths::meta_path(&base_dir, &session_id);
     let socket_path = paths::socket_path(&base_dir, &session_id);
+
+    // 名前選定と予約(server_pid=0のmeta)書き込みをflock内で完結させる。
+    // 書き終えたらscopeを抜けてflockを解放し、child(server)が親のflock fdを継承しないようにする
+    let name = {
+        let _lock = runtime_lock::acquire_runtime_lock(&base_dir)?;
+        let taken: HashSet<String> = session::list_all_meta(&base_dir)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+        let name = match requested_name {
+            Some(n) => {
+                if taken.contains(&n) {
+                    bail!(
+                        "Session name '{n}' is already in use. Run `skeeper attach {n}` to attach"
+                    );
+                }
+                n
+            }
+            None => name_gen::pick_available_name(&mut rand::rng(), &taken).with_context(|| {
+                format!(
+                    "No available session name ({} name space exhausted)",
+                    name_gen::TOTAL_NAMES
+                )
+            })?,
+        };
+        // reservation: server_pid=0の状態でmeta書き込みして名前を占有する。
+        // server起動時にwrite_meta_atomicで正しいserver_pid/started_atに上書きされる
+        let reservation = SessionMeta {
+            id: session_id,
+            name: name.clone(),
+            cwd: cwd.clone(),
+            shell: shell.clone(),
+            created_at: OffsetDateTime::now_utc(),
+            last_attached_at: None,
+            server_pid: 0,
+            server_started_at: OffsetDateTime::UNIX_EPOCH,
+            attached_client_pids: Vec::new(),
+        };
+        session::write_meta_atomic(&meta_path, &reservation)?;
+        name
+    };
 
     // fork前にArgsを組み立てておく(子プロセスで新規allocationを最小にするため)
     let server_args = ServerRunArgs {
@@ -58,9 +98,13 @@ pub(crate) fn run(args: NewArgs) -> anyhow::Result<()> {
     // (portable-pty / clap / anyhow等は従来のspawn+exec方式でも同じ環境で動いていた)
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => {
-            wait_for_server_ready(&socket_path, child, SERVER_READY_TIMEOUT)?;
+            if let Err(e) = wait_for_server_ready(&socket_path, child, SERVER_READY_TIMEOUT) {
+                // startup失敗時は予約metaを掃除(orphanのままlist/pickに影響しないよう)
+                let _ = std::fs::remove_file(&meta_path);
+                return Err(e);
+            }
 
-            if args.detached {
+            if detached {
                 println!("Session created: {name}");
                 return Ok(());
             }
@@ -78,7 +122,10 @@ pub(crate) fn run(args: NewArgs) -> anyhow::Result<()> {
             // Rustのdestructorをスキップして即抜ける。親側で管理するリソースを子で走らせない意図
             std::process::exit(code);
         }
-        Err(e) => Err(anyhow::anyhow!("fork failed: {e}")),
+        Err(e) => {
+            let _ = std::fs::remove_file(&meta_path);
+            Err(anyhow::anyhow!("fork failed: {e}"))
+        }
     }
 }
 
@@ -87,6 +134,24 @@ fn resolve_shell(arg: Option<&str>, env: Option<&str>) -> PathBuf {
     arg.filter(|s| !s.is_empty())
         .or_else(|| env.filter(|s| !s.is_empty()))
         .map_or_else(|| PathBuf::from("/bin/sh"), PathBuf::from)
+}
+
+/// --cwd引数を解決する。指定なしなら現在のcwdを踏襲、指定ありは相対→絶対化+存在/is_dir検証
+fn resolve_cwd(arg: Option<&Path>, current: &Path) -> anyhow::Result<PathBuf> {
+    let Some(p) = arg else {
+        return Ok(current.to_path_buf());
+    };
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        current.join(p)
+    };
+    let meta = std::fs::metadata(&abs)
+        .with_context(|| format!("--cwd '{}' is not accessible", abs.display()))?;
+    if !meta.is_dir() {
+        bail!("--cwd '{}' is not a directory", abs.display());
+    }
+    Ok(abs)
 }
 
 /// stdin/stdout/stderrを/dev/nullに向け直す。子プロセスから親端末への副作用を断つ。

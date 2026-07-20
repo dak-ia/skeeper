@@ -75,10 +75,10 @@ fn control_rename_updates_meta() -> Result<()> {
     // metaがatomic write完了するまで待つ
     let start = Instant::now();
     while start.elapsed() < CLEANUP_TIMEOUT {
-        if let Ok(meta) = session::read_meta(&server.meta_path()) {
-            if meta.name == "test-rename-after" {
-                return Ok(());
-            }
+        if let Ok(meta) = session::read_meta(&server.meta_path())
+            && meta.name == "test-rename-after"
+        {
+            return Ok(());
         }
         sleep(Duration::from_millis(50));
     }

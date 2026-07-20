@@ -81,10 +81,10 @@ fn fork_daemon_persists_after_parent_new_exit() -> Result<()> {
     let base_dir = runtime_dir.join("skeeper");
     let start = Instant::now();
     let meta = loop {
-        if let Ok(metas) = session::list_all_meta(&base_dir) {
-            if let Some(m) = metas.into_iter().find(|m| m.name == name) {
-                break m;
-            }
+        if let Ok(metas) = session::list_all_meta(&base_dir)
+            && let Some(m) = metas.into_iter().find(|m| m.name == name)
+        {
+            break m;
         }
         if start.elapsed() >= READY_TIMEOUT {
             bail!("meta for '{name}' did not appear within {READY_TIMEOUT:?}");

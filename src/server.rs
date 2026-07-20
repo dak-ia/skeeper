@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -57,6 +57,10 @@ pub(super) static TERM_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// 0は「まだ誰もstdin送っていない」を意味する。single-session server前提のstatic
 pub(super) static LAST_STDIN_CLIENT: AtomicU32 = AtomicU32::new(0);
 
+/// 各attachを一意に識別するcounter。同一pidが再attachしてきた際、古い側の後片付けが
+/// 「今のslot所有者」を上書きしてしまわないようownership比較に使う。0は無効値
+pub(super) static ATTACH_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 /// attached_loopに配送するイベント。client読み取りとpty出力を1つのchannelで受けて、
 /// pty_reader_loopが個別clientのwriteをブロックしないようにする
 pub(super) enum ClientEvent {
@@ -69,8 +73,27 @@ pub(super) enum ClientEvent {
 /// 接続中の各clientについて、pty出力を積むevent送信口と個別detachシグナルを持つ。
 /// streamはattached_loopが自前で保持しているのでここには入れない
 pub(super) struct ClientHandle {
+    /// このattachを一意に識別するid。同一pidの新旧attachが混在した際にどちらの
+    /// 後片付けが今のslot所有者かを判定するために使う
+    pub(super) attach_id: u64,
+    /// このclientの端末サイズ。multi-client時にmin集約でpty sizeを決める
+    pub(super) cols: u16,
+    pub(super) rows: u16,
     pub(super) should_detach: Arc<AtomicBool>,
     pub(super) event_tx: mpsc::Sender<ClientEvent>,
+}
+
+/// active_clients全体の最小 (cols, rows) を求める。0 clientならNone
+pub(super) fn aggregate_min_size(acl: &HashMap<u32, ClientHandle>) -> Option<(u16, u16)> {
+    let mut cols = u16::MAX;
+    let mut rows = u16::MAX;
+    let mut any = false;
+    for h in acl.values() {
+        cols = cols.min(h.cols);
+        rows = rows.min(h.rows);
+        any = true;
+    }
+    if any { Some((cols, rows)) } else { None }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -101,7 +124,7 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
     } = args;
 
     let base_dir = paths::runtime_dir()?;
-    std::fs::create_dir_all(&base_dir)?;
+    paths::ensure_runtime_dir(&base_dir)?;
     let meta_path = paths::meta_path(&base_dir, &id);
     let socket_path = paths::socket_path(&base_dir, &id);
     let ctl_socket_path = paths::ctl_path(&base_dir, &id);
@@ -270,3 +293,7 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "server_tests.rs"]
+mod tests;

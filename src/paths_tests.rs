@@ -74,3 +74,24 @@ fn ctl_path_uses_uuid_hyphenated() {
         Path::new("/base/550e8400-e29b-41d4-a716-446655440000.ctl")
     );
 }
+
+#[test]
+fn ensure_runtime_dir_creates_with_0700() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("newly-created");
+    ensure_runtime_dir(&target).unwrap();
+    let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700);
+}
+
+#[test]
+fn ensure_runtime_dir_tightens_existing_0755_to_0700() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("existing-loose");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    ensure_runtime_dir(&target).unwrap();
+    let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700);
+}

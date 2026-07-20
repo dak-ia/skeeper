@@ -116,13 +116,13 @@ pub fn attach(socket_path: &Path) -> Result<()> {
     let mut stdout = io::stdout();
     loop {
         // SIGWINCH検知 → 新しいサイズをResizeで送る
-        if SIGWINCH_RECEIVED.swap(false, Ordering::AcqRel) {
-            if let Ok((c, r)) = terminal::size() {
-                let _ = ipc::write_client_msg(
-                    &mut *write_stream.lock().unwrap(),
-                    &ClientMsg::Resize { cols: c, rows: r },
-                );
-            }
+        if SIGWINCH_RECEIVED.swap(false, Ordering::AcqRel)
+            && let Ok((c, r)) = terminal::size()
+        {
+            let _ = ipc::write_client_msg(
+                &mut *write_stream.lock().unwrap(),
+                &ClientMsg::Resize { cols: c, rows: r },
+            );
         }
         // SIGTERM検知 → Detachを送るだけでbreakはしない。serverがDetachAckを返し、
         // 既存のDetachAck分岐でloopを抜けて後始末する経路に合流させる

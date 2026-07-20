@@ -89,10 +89,10 @@ pub fn pick_sessions_multi(sessions: &[SessionMeta]) -> Result<Option<Vec<usize>
                 cursor.select(Some((i + 1) % sessions.len()));
             }
             KeyCode::Char(' ') => {
-                if let Some(i) = cursor.selected() {
-                    if !selected.remove(&i) {
-                        selected.insert(i);
-                    }
+                if let Some(i) = cursor.selected()
+                    && !selected.remove(&i)
+                {
+                    selected.insert(i);
                 }
             }
             KeyCode::Enter => {

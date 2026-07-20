@@ -28,11 +28,11 @@ fn scrollback_is_replayed_on_new_client() -> Result<()> {
     // c1でエコーが返るのを待つ
     let mut c1_saw_echo = false;
     for _ in 0..30 {
-        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c1) {
-            if bytes.windows(16).any(|w| w == b"hello-scrollback") {
-                c1_saw_echo = true;
-                break;
-            }
+        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c1)
+            && bytes.windows(16).any(|w| w == b"hello-scrollback")
+        {
+            c1_saw_echo = true;
+            break;
         }
     }
     assert!(
@@ -61,11 +61,11 @@ fn scrollback_is_replayed_on_new_client() -> Result<()> {
     // c2の最初のStdoutメッセージがscrollback (hello-scrollbackを含む)
     let mut c2_saw_replay = false;
     for _ in 0..10 {
-        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c2) {
-            if bytes.windows(16).any(|w| w == b"hello-scrollback") {
-                c2_saw_replay = true;
-                break;
-            }
+        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c2)
+            && bytes.windows(16).any(|w| w == b"hello-scrollback")
+        {
+            c2_saw_replay = true;
+            break;
         }
     }
     assert!(c2_saw_replay, "second client should see scrollback replay");

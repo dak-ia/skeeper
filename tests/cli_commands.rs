@@ -119,6 +119,43 @@ fn kill_all_terminates_multiple_sessions() -> Result<()> {
 }
 
 #[test]
+fn kill_all_with_yes_flag_bypasses_confirmation_on_null_stdin() -> Result<()> {
+    // --yes/-y は tty 有無に関係なく確認を省く挙動を検証。
+    // 従来は stdin が EOF (Stdio::null) だと confirm() が false を返して "Aborted" 経路になっていた
+    let tmp = TempDir::new()?;
+    let s1 = spawn_server_in(tmp.path(), "kill-yes-1", "/bin/cat")?;
+    let s2 = spawn_server_in(tmp.path(), "kill-yes-2", "/bin/cat")?;
+
+    let output = Command::new(skeeper_bin())
+        .env("XDG_RUNTIME_DIR", tmp.path())
+        .args(["kill", "--all", "--yes"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()?;
+    assert!(
+        output.status.success(),
+        "kill --all --yes should succeed even with null stdin. stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("Aborted"),
+        "should not print 'Aborted' with --yes"
+    );
+
+    // 両サーバが実際に終わっている事を確認
+    let start = Instant::now();
+    while start.elapsed() < CLEANUP_TIMEOUT {
+        if !pid_alive(s1.pid()) && !pid_alive(s2.pid()) {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(50));
+    }
+    bail!("server processes still alive after kill --all --yes");
+}
+
+#[test]
 fn list_prints_session_names() -> Result<()> {
     let tmp = TempDir::new()?;
     // ハンドルはlist実行中も生かしておく必要があるので`_s1`/`_s2`で束縛(即drop回避)
@@ -169,10 +206,10 @@ fn rename_via_cli_updates_meta() -> Result<()> {
     // rename CLIは制御ソケットへの投げっぱなし。metaのatomic write完了までpollする
     let start = Instant::now();
     while start.elapsed() < CLEANUP_TIMEOUT {
-        if let Ok(meta) = session::read_meta(&server.meta_path()) {
-            if meta.name == "rename-after" {
-                return Ok(());
-            }
+        if let Ok(meta) = session::read_meta(&server.meta_path())
+            && meta.name == "rename-after"
+        {
+            return Ok(());
         }
         sleep(Duration::from_millis(50));
     }
@@ -232,10 +269,10 @@ fn detach_via_cli_triggers_detach_ack() -> Result<()> {
     // detach.rsは attached_client_pids.is_empty() で先にbailするため、meta更新完了まで待つ
     let start = Instant::now();
     loop {
-        if let Ok(m) = session::read_meta(&server.meta_path()) {
-            if !m.attached_client_pids.is_empty() {
-                break;
-            }
+        if let Ok(m) = session::read_meta(&server.meta_path())
+            && !m.attached_client_pids.is_empty()
+        {
+            break;
         }
         if start.elapsed() >= CLEANUP_TIMEOUT {
             bail!("attached_client_pids did not appear on meta");
@@ -313,10 +350,10 @@ fn new_with_name_creates_session() -> Result<()> {
                 .count()
         });
         let metas = session::list_all_meta(&base_dir).unwrap_or_default();
-        if json_count == 1 {
-            if let Some(m) = metas.into_iter().find(|m| m.name == "new-named") {
-                break m;
-            }
+        if json_count == 1
+            && let Some(m) = metas.into_iter().find(|m| m.name == "new-named")
+        {
+            break m;
         }
         if start.elapsed() >= READY_TIMEOUT {
             let names: Vec<String> = session::list_all_meta(&base_dir)

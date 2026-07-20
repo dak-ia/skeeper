@@ -68,10 +68,10 @@ fn multi_client_both_receive_pty_output() -> Result<()> {
     // c1の登録完了を待つ
     let start = Instant::now();
     loop {
-        if let Ok(m) = session::read_meta(&server.meta_path()) {
-            if m.attached_client_pids.contains(&pid_a) {
-                break;
-            }
+        if let Ok(m) = session::read_meta(&server.meta_path())
+            && m.attached_client_pids.contains(&pid_a)
+        {
+            break;
         }
         if start.elapsed() >= Duration::from_secs(3) {
             bail!("c1 was not registered on meta");
@@ -85,10 +85,11 @@ fn multi_client_both_receive_pty_output() -> Result<()> {
     // c2の登録完了(2件揃う)を待つ
     let start = Instant::now();
     loop {
-        if let Ok(m) = session::read_meta(&server.meta_path()) {
-            if m.attached_client_pids.contains(&pid_a) && m.attached_client_pids.contains(&pid_b) {
-                break;
-            }
+        if let Ok(m) = session::read_meta(&server.meta_path())
+            && m.attached_client_pids.contains(&pid_a)
+            && m.attached_client_pids.contains(&pid_b)
+        {
+            break;
         }
         if start.elapsed() >= Duration::from_secs(3) {
             bail!("c2 was not registered on meta");
@@ -101,22 +102,22 @@ fn multi_client_both_receive_pty_output() -> Result<()> {
 
     let mut c1_saw = false;
     for _ in 0..40 {
-        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c1) {
-            if bytes.windows(10).any(|w| w == b"fanout-msg") {
-                c1_saw = true;
-                break;
-            }
+        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c1)
+            && bytes.windows(10).any(|w| w == b"fanout-msg")
+        {
+            c1_saw = true;
+            break;
         }
     }
     assert!(c1_saw, "c1 should receive fanout-msg from pty");
 
     let mut c2_saw = false;
     for _ in 0..40 {
-        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c2) {
-            if bytes.windows(10).any(|w| w == b"fanout-msg") {
-                c2_saw = true;
-                break;
-            }
+        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c2)
+            && bytes.windows(10).any(|w| w == b"fanout-msg")
+        {
+            c2_saw = true;
+            break;
         }
     }
     assert!(c2_saw, "c2 should also receive fanout-msg from pty");
@@ -144,10 +145,11 @@ fn individual_detach_via_client_close() -> Result<()> {
     // 2台とも登録されるまで待つ
     let start = Instant::now();
     loop {
-        if let Ok(m) = session::read_meta(&server.meta_path()) {
-            if m.attached_client_pids.contains(&pid_a) && m.attached_client_pids.contains(&pid_b) {
-                break;
-            }
+        if let Ok(m) = session::read_meta(&server.meta_path())
+            && m.attached_client_pids.contains(&pid_a)
+            && m.attached_client_pids.contains(&pid_b)
+        {
+            break;
         }
         if start.elapsed() >= Duration::from_secs(3) {
             bail!("two clients were not both registered on meta");
@@ -163,11 +165,12 @@ fn individual_detach_via_client_close() -> Result<()> {
     let start = Instant::now();
     let mut ok = false;
     while start.elapsed() < Duration::from_secs(3) {
-        if let Ok(m) = session::read_meta(&server.meta_path()) {
-            if !m.attached_client_pids.contains(&pid_a) && m.attached_client_pids.contains(&pid_b) {
-                ok = true;
-                break;
-            }
+        if let Ok(m) = session::read_meta(&server.meta_path())
+            && !m.attached_client_pids.contains(&pid_a)
+            && m.attached_client_pids.contains(&pid_b)
+        {
+            ok = true;
+            break;
         }
         sleep(Duration::from_millis(50));
     }
@@ -180,11 +183,11 @@ fn individual_detach_via_client_close() -> Result<()> {
     ipc::write_client_msg(&mut c2, &ClientMsg::Stdin(b"still-here\n".to_vec()))?;
     let mut c2_ok = false;
     for _ in 0..40 {
-        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c2) {
-            if bytes.windows(10).any(|w| w == b"still-here") {
-                c2_ok = true;
-                break;
-            }
+        if let Ok(ServerMsg::Stdout(bytes)) = ipc::read_server_msg(&mut c2)
+            && bytes.windows(10).any(|w| w == b"still-here")
+        {
+            c2_ok = true;
+            break;
         }
     }
     assert!(c2_ok, "c2 should still be attached and echoing");

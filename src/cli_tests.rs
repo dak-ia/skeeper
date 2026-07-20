@@ -25,6 +25,29 @@ fn new_with_name_detached_and_shell_captures_all() {
             assert_eq!(args.name.as_deref(), Some("myname"));
             assert!(args.detached);
             assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
+            assert_eq!(args.cwd, None);
+        }
+        other => panic!("expected New, got {other:?}"),
+    }
+}
+
+#[test]
+fn new_with_cwd_long_flag_captures_path() {
+    let cli = parse(&["skeeper", "new", "--cwd", "/tmp"]);
+    match cli.command {
+        Some(Command::New(args)) => {
+            assert_eq!(args.cwd.as_deref(), Some(std::path::Path::new("/tmp")));
+        }
+        other => panic!("expected New, got {other:?}"),
+    }
+}
+
+#[test]
+fn new_with_cwd_short_flag_captures_path() {
+    let cli = parse(&["skeeper", "new", "-c", "/tmp"]);
+    match cli.command {
+        Some(Command::New(args)) => {
+            assert_eq!(args.cwd.as_deref(), Some(std::path::Path::new("/tmp")));
         }
         other => panic!("expected New, got {other:?}"),
     }
@@ -109,6 +132,7 @@ fn kill_without_args_has_no_target_and_no_all_flag() {
         Some(Command::Kill(args)) => {
             assert_eq!(args.name, None);
             assert!(!args.all);
+            assert!(!args.yes);
         }
         other => panic!("expected Kill, got {other:?}"),
     }
@@ -121,6 +145,7 @@ fn kill_with_positional_targets_named_session() {
         Some(Command::Kill(args)) => {
             assert_eq!(args.name.as_deref(), Some("foo"));
             assert!(!args.all);
+            assert!(!args.yes);
         }
         other => panic!("expected Kill, got {other:?}"),
     }
@@ -133,6 +158,43 @@ fn kill_with_all_flag_sets_all_true() {
         Some(Command::Kill(args)) => {
             assert_eq!(args.name, None);
             assert!(args.all);
+            assert!(!args.yes);
+        }
+        other => panic!("expected Kill, got {other:?}"),
+    }
+}
+
+#[test]
+fn kill_with_yes_short_flag() {
+    let cli = parse(&["skeeper", "kill", "-y"]);
+    match cli.command {
+        Some(Command::Kill(args)) => {
+            assert!(args.yes);
+            assert!(!args.all);
+        }
+        other => panic!("expected Kill, got {other:?}"),
+    }
+}
+
+#[test]
+fn kill_with_yes_long_flag_and_name() {
+    let cli = parse(&["skeeper", "kill", "--yes", "foo"]);
+    match cli.command {
+        Some(Command::Kill(args)) => {
+            assert_eq!(args.name.as_deref(), Some("foo"));
+            assert!(args.yes);
+        }
+        other => panic!("expected Kill, got {other:?}"),
+    }
+}
+
+#[test]
+fn kill_with_all_and_yes_combined() {
+    let cli = parse(&["skeeper", "kill", "-a", "-y"]);
+    match cli.command {
+        Some(Command::Kill(args)) => {
+            assert!(args.all);
+            assert!(args.yes);
         }
         other => panic!("expected Kill, got {other:?}"),
     }

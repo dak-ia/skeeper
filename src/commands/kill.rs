@@ -17,6 +17,7 @@ const KILL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 pub(crate) fn run(args: KillArgs) -> anyhow::Result<()> {
     let base_dir = paths::runtime_dir()?;
     let sessions = session::list_all_meta(&base_dir).unwrap_or_default();
+    let skip_confirm = args.yes;
 
     // 対象を決定する:
     //   1) -a all             → 全セッション、y/N確認
@@ -54,7 +55,7 @@ pub(crate) fn run(args: KillArgs) -> anyhow::Result<()> {
         (selected, false)
     };
 
-    if requires_confirmation {
+    if requires_confirmation && !skip_confirm {
         let names: Vec<&str> = targets.iter().map(|m| m.name.as_str()).collect();
         let prompt = if targets.len() == 1 {
             format!("Kill session '{}'? [y/N] ", names[0])

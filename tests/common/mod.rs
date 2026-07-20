@@ -139,17 +139,17 @@ pub fn spawn_server_in(runtime_dir: &Path, name: &str, shell: &str) -> Result<Se
     let base_dir = runtime_dir.join("skeeper");
     let start = Instant::now();
     let handle = loop {
-        if let Ok(metas) = session::list_all_meta(&base_dir) {
-            if let Some(m) = metas.into_iter().find(|m| m.name == name) {
-                #[allow(clippy::cast_possible_wrap)] // pidは常にpositive i32範囲
-                let pid = Pid::from_raw(m.server_pid as i32);
-                break SessionHandle {
-                    server_pid: pid,
-                    base_dir: base_dir.clone(),
-                    id: m.id,
-                    name: name.to_string(),
-                };
-            }
+        if let Ok(metas) = session::list_all_meta(&base_dir)
+            && let Some(m) = metas.into_iter().find(|m| m.name == name)
+        {
+            #[allow(clippy::cast_possible_wrap)] // pidは常にpositive i32範囲
+            let pid = Pid::from_raw(m.server_pid as i32);
+            break SessionHandle {
+                server_pid: pid,
+                base_dir: base_dir.clone(),
+                id: m.id,
+                name: name.to_string(),
+            };
         }
         if start.elapsed() >= READY_TIMEOUT {
             bail!("meta for '{name}' did not appear within {READY_TIMEOUT:?}");
@@ -191,11 +191,11 @@ pub fn spawn_server(name: &str, shell: &str) -> Result<ServerGuard> {
     // 指定nameのメタが現れるまで待つ(-d完了時点で書き込み済のはずだが、fs反映の遅延を保険で許容)
     let start = Instant::now();
     let (id, server_pid) = loop {
-        if let Ok(metas) = session::list_all_meta(&base_dir) {
-            if let Some(m) = metas.into_iter().find(|m| m.name == name) {
-                #[allow(clippy::cast_possible_wrap)] // pidは常にpositive i32範囲
-                break (m.id, Pid::from_raw(m.server_pid as i32));
-            }
+        if let Ok(metas) = session::list_all_meta(&base_dir)
+            && let Some(m) = metas.into_iter().find(|m| m.name == name)
+        {
+            #[allow(clippy::cast_possible_wrap)] // pidは常にpositive i32範囲
+            break (m.id, Pid::from_raw(m.server_pid as i32));
         }
         if start.elapsed() >= READY_TIMEOUT {
             bail!("meta for '{name}' did not appear within {READY_TIMEOUT:?}");

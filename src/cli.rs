@@ -64,6 +64,9 @@ pub struct NewArgs {
     /// Shell to run inside the session
     #[arg(short = 's', long)]
     pub shell: Option<String>,
+    /// Initial working directory (default: current directory)
+    #[arg(short = 'c', long)]
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -95,6 +98,9 @@ pub struct KillArgs {
     /// Kill all sessions
     #[arg(short = 'a', long)]
     pub all: bool,
+    /// Skip confirmation prompt
+    #[arg(short = 'y', long)]
+    pub yes: bool,
 }
 
 #[cfg(test)]

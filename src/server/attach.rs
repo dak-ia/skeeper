@@ -18,8 +18,8 @@ use crate::session::{self, SessionMeta};
 
 use super::guards::AttachStateGuard;
 use super::{
-    ClientEvent, ClientHandle, HANDSHAKE_READ_TIMEOUT, HandleOutcome, LAST_STDIN_CLIENT,
-    POLL_INTERVAL, SOCKET_WRITE_TIMEOUT, TERM_REQUESTED,
+    ATTACH_ID_COUNTER, ClientEvent, ClientHandle, HANDSHAKE_READ_TIMEOUT, HandleOutcome,
+    LAST_STDIN_CLIENT, POLL_INTERVAL, SOCKET_WRITE_TIMEOUT, TERM_REQUESTED, aggregate_min_size,
 };
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -63,13 +63,6 @@ pub(super) fn handle_client(
         return Ok(HandleOutcome::Disconnected);
     };
 
-    // 初期端末サイズを反映(clientが接続する前に済ませる)
-    let _ = master.lock().unwrap().resize(PtySize {
-        cols,
-        rows,
-        pixel_width: 0,
-        pixel_height: 0,
-    });
 
     // ---- 順序の要: HelloOkを送信してからactive_clientsに登録する ----
     //   ・登録前に送るので、pty_readerがStdoutを差し込む余地がない
@@ -91,22 +84,36 @@ pub(super) fn handle_client(
     let should_detach = Arc::new(AtomicBool::new(false));
     // client読み取り・pty出力の両方をこのchannelに集めてattached_loopで処理する
     let (event_tx, event_rx) = mpsc::channel::<ClientEvent>();
+    // このattach一意のid。cleanup時にslot所有者かどうかの判定に使う(pid再利用/同一pid再attach対策)
+    let attach_id = ATTACH_ID_COUNTER.fetch_add(1, Ordering::AcqRel);
 
-    // ---- scrollback snapshot + active_clients登録(atomic) ----
-    // scrollback + active_clientsの両ロック中に「snapshotコピー + self挿入」を一気に済ませる。
-    // ロック解放後の実際のsocket書き込みは外に出しているので、遅いclientでも
-    // active_clientsとscrollbackは長時間ブロックしない
+    // ---- scrollback snapshot + active_clients登録 + pty size集約(atomic) ----
     let snapshot: Vec<u8> = {
         let sb = scrollback.lock().unwrap();
         let mut acl = active_clients.lock().unwrap();
         let snap: Vec<u8> = sb.iter().copied().collect();
+        // 同一pidが既にmapに残っている場合、古い側にdetachシグナルを立てて置換する
+        if let Some(old) = acl.remove(&client_pid) {
+            old.should_detach.store(true, Ordering::Release);
+        }
         acl.insert(
             client_pid,
             ClientHandle {
+                attach_id,
+                cols,
+                rows,
                 should_detach: Arc::clone(&should_detach),
                 event_tx: event_tx.clone(),
             },
         );
+        if let Some((c, r)) = aggregate_min_size(&acl) {
+            let _ = master.lock().unwrap().resize(PtySize {
+                cols: c,
+                rows: r,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
         snap
     };
 
@@ -121,9 +128,11 @@ pub(super) fn handle_client(
     }
     let mut attach_guard = AttachStateGuard {
         client_pid,
+        attach_id,
         active_clients,
         meta,
         meta_path,
+        master: Some(master),
         armed: true,
     };
 
@@ -166,6 +175,7 @@ pub(super) fn handle_client(
     let outcome = attached_loop(
         writer,
         master,
+        active_clients,
         &write_stream,
         &event_rx,
         child_exited,
@@ -174,15 +184,25 @@ pub(super) fn handle_client(
     );
 
     // ---- 順序の要: 先にactive_clientsから外してpty_readerのfanout先を絞る ----
-    // pty_readerはacl lockを取ってsend、send失敗pidは事後掃除の設計なので、
-    // ここでlockを取れた時点で「in-flight sendは既に終わっている」
-    // 以降のpty_reader iterationは自clientをmapに見つけずPtyChunkを送らない
     attach_guard.disarm();
-    {
+    let is_still_current = {
         let mut acl = active_clients.lock().unwrap();
-        acl.remove(&client_pid);
-    }
-    {
+        let owned = matches!(acl.get(&client_pid), Some(h) if h.attach_id == attach_id);
+        if owned {
+            acl.remove(&client_pid);
+            // 抜けたので残りclientのminでptyを再集約(0 clientならkeep最後のサイズ)
+            if let Some((c, r)) = aggregate_min_size(&acl) {
+                let _ = master.lock().unwrap().resize(PtySize {
+                    cols: c,
+                    rows: r,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
+        }
+        owned
+    };
+    if is_still_current {
         let mut m = meta.lock().unwrap();
         m.attached_client_pids.retain(|&p| p != client_pid);
         let _ = session::write_meta_atomic(meta_path, &m);
@@ -214,6 +234,7 @@ pub(super) fn handle_client(
 fn attached_loop(
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     master: &Mutex<Box<dyn MasterPty + Send>>,
+    active_clients: &Mutex<HashMap<u32, ClientHandle>>,
     write_stream: &Arc<Mutex<UnixStream>>,
     event_rx: &mpsc::Receiver<ClientEvent>,
     child_exited: &AtomicBool,
@@ -239,12 +260,21 @@ fn attached_loop(
                 let _ = w.flush();
             }
             Ok(ClientEvent::ClientMsg(Ok(ClientMsg::Resize { cols, rows }))) => {
-                let _ = master.lock().unwrap().resize(PtySize {
-                    cols,
-                    rows,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                });
+                // 自clientのサイズを更新してから全体minでresize。
+                // 単一clientしか居ないケースでは実質「送られた通りに合わせる」
+                let mut acl = active_clients.lock().unwrap();
+                if let Some(h) = acl.get_mut(&self_pid) {
+                    h.cols = cols;
+                    h.rows = rows;
+                }
+                if let Some((c, r)) = aggregate_min_size(&acl) {
+                    let _ = master.lock().unwrap().resize(PtySize {
+                        cols: c,
+                        rows: r,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
+                }
             }
             Ok(ClientEvent::ClientMsg(Ok(ClientMsg::Detach))) => {
                 return HandleOutcome::Detached;

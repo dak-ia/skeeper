@@ -107,6 +107,23 @@ fn is_pid_alive(pid: u32) -> anyhow::Result<bool> {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn process_start_time(pid: u32) -> anyhow::Result<Option<OffsetDateTime>> {
+    use libproc::proc_pid::pidinfo;
+    use libproc::task_info::TaskAllInfo;
+
+    let pid_i32 = i32::try_from(pid)?;
+    // 存在しないPIDや権限不足はErr→Ok(None)扱いにして、呼び出し側で「孤児」扱いにする
+    let info = match pidinfo::<TaskAllInfo>(pid_i32, 0) {
+        Ok(i) => i,
+        Err(_) => return Ok(None),
+    };
+    let sec = i64::try_from(info.pbsd.pbi_start_tvsec)?;
+    let usec = i64::try_from(info.pbsd.pbi_start_tvusec)?;
+    let dt = OffsetDateTime::from_unix_timestamp(sec)? + time::Duration::microseconds(usec);
+    Ok(Some(dt))
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn process_start_time(pid: u32) -> anyhow::Result<Option<OffsetDateTime>> {
     // commフィールドはprctl(PR_SET_NAME)で任意バイトが入り得るのでバイト列で読む。

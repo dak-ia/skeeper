@@ -3,7 +3,7 @@ use std::os::unix::net::UnixStream;
 use anyhow::Context;
 
 use crate::cli::RenameArgs;
-use crate::ipc::{self, ControlMsg};
+use crate::ipc::{self, ControlMsg, ControlResponse, RenameResponse};
 use crate::{paths, session};
 
 use super::current_session_id;
@@ -12,7 +12,7 @@ pub(crate) fn run(args: RenameArgs) -> anyhow::Result<()> {
     let base_dir = paths::runtime_dir()?;
     let sessions = session::list_all_meta(&base_dir).unwrap_or_default();
 
-    // 対象セッションを決める: -o指定ならその名前、無指定なら接続中のセッション
+    // uniqueness判定はサーバ側でflock下に行うため、ここでは事前チェックしない
     let target = if let Some(old_name) = args.old {
         sessions
             .iter()
@@ -32,12 +32,6 @@ pub(crate) fn run(args: RenameArgs) -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("Current session metadata not found"))?
     };
 
-    // 新しい名前が他のセッションと衝突しないか。自分と同じ名前(no-op)は許容
-    if target.name != args.new_name && sessions.iter().any(|m| m.name == args.new_name) {
-        anyhow::bail!("Session name '{}' is already in use", args.new_name);
-    }
-
-    // 制御ソケット経由でサーバに依頼(サーバ側でmeta更新+atomic write)
     let ctl_path = paths::ctl_path(&base_dir, &target.id);
     let mut stream = UnixStream::connect(&ctl_path)
         .with_context(|| format!("Failed to connect to control socket {}", ctl_path.display()))?;
@@ -47,8 +41,25 @@ pub(crate) fn run(args: RenameArgs) -> anyhow::Result<()> {
             new_name: args.new_name.clone(),
         },
     )?;
-    println!("Renamed '{}' to '{}'", target.name, args.new_name);
-    Ok(())
+    let response = ipc::read_control_response(&mut stream)
+        .context("Failed to read rename response from server")?;
+    match response {
+        ControlResponse::Rename(RenameResponse::Ok) => {
+            println!("Renamed '{}' to '{}'", target.name, args.new_name);
+            Ok(())
+        }
+        ControlResponse::Rename(RenameResponse::Unchanged) => {
+            println!("Session name unchanged: '{}'", args.new_name);
+            Ok(())
+        }
+        ControlResponse::Rename(RenameResponse::Conflict) => {
+            anyhow::bail!("Session name '{}' is already in use", args.new_name)
+        }
+        ControlResponse::Rename(RenameResponse::Failed) => {
+            anyhow::bail!("Server failed to rename session (try again in a moment)")
+        }
+        other => anyhow::bail!("Unexpected response from server: {other:?}"),
+    }
 }
 
 #[cfg(test)]

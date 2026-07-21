@@ -12,7 +12,9 @@ use tempfile::tempdir;
 use time::macros::datetime;
 use uuid::Uuid;
 
-use crate::ipc::{ControlMsg, ControlResponse, read_control_response, write_control_msg};
+use crate::ipc::{
+    ControlMsg, ControlResponse, RenameResponse, read_control_response, write_control_msg,
+};
 use crate::server::{ClientEvent, ClientHandle, LAST_STDIN_CLIENT};
 use crate::session::{self, SessionMeta};
 
@@ -40,7 +42,7 @@ fn dummy_meta() -> SessionMeta {
 /// sendしないので実害はないが、Receiverの生存を明示する意図で一緒に返す)
 fn make_client_handle() -> (ClientHandle, Arc<AtomicBool>, mpsc::Receiver<ClientEvent>) {
     let should_detach = Arc::new(AtomicBool::new(false));
-    let (event_tx, event_rx) = mpsc::channel::<ClientEvent>();
+    let (event_tx, event_rx) = mpsc::sync_channel::<ClientEvent>(16);
     let handle = ClientHandle {
         attach_id: 1,
         cols: 80,
@@ -156,18 +158,40 @@ fn detach_request_is_noop_when_target_absent() {
     assert!(!flag.load(Ordering::SeqCst));
 }
 
+/// meta_pathがbase_dir配下のuuid.jsonであることをprocess_rename_requestが期待するので、
+/// tempdir直下ではなくuuid.jsonの形で置く。他のsession metaを一緒に置きたいテストで使う
+fn write_meta_in(base_dir: &std::path::Path, meta: &SessionMeta) -> PathBuf {
+    let p = base_dir.join(format!("{}.json", meta.id));
+    session::write_meta_atomic(&p, meta).unwrap();
+    p
+}
+
+/// UnixStream::pair直結で1メッセージ送信+response読み取り。feed_messageと違い応答をreadできる
+fn request_and_read_response(
+    msg: &ControlMsg,
+    active_clients: &Mutex<HashMap<u32, ClientHandle>>,
+    meta: &Mutex<SessionMeta>,
+    meta_path: &std::path::Path,
+) -> ControlResponse {
+    let (mut client_side, mut server_side) = UnixStream::pair().unwrap();
+    write_control_msg(&mut client_side, msg).unwrap();
+    handle_control_message(&mut server_side, active_clients, meta, meta_path);
+    read_control_response(&mut client_side).unwrap()
+}
+
 #[test]
-fn rename_request_updates_meta_and_persists() {
+fn rename_request_returns_ok_and_updates_meta() {
     let _guard = LOCK.lock().unwrap();
 
     let dir = tempdir().unwrap();
-    let meta_path = dir.path().join("meta.json");
-    let meta_state = Mutex::new(dummy_meta());
-    session::write_meta_atomic(&meta_path, &meta_state.lock().unwrap()).unwrap();
-
+    let base_dir = dir.path();
+    let mut initial = dummy_meta();
+    initial.id = Uuid::from_u128(0x1);
+    let meta_path = write_meta_in(base_dir, &initial);
+    let meta_state = Mutex::new(initial);
     let active_clients: Mutex<HashMap<u32, ClientHandle>> = Mutex::new(HashMap::new());
 
-    feed_message(
+    let resp = request_and_read_response(
         &ControlMsg::RequestRename {
             new_name: "renamed".to_string(),
         },
@@ -176,14 +200,78 @@ fn rename_request_updates_meta_and_persists() {
         &meta_path,
     );
 
+    assert_eq!(resp, ControlResponse::Rename(RenameResponse::Ok));
     assert_eq!(meta_state.lock().unwrap().name, "renamed");
     let persisted = session::read_meta(&meta_path).unwrap();
     assert_eq!(persisted.name, "renamed");
 }
 
 #[test]
+fn rename_request_with_same_name_returns_unchanged() {
+    let _guard = LOCK.lock().unwrap();
+
+    let dir = tempdir().unwrap();
+    let base_dir = dir.path();
+    let mut initial = dummy_meta();
+    initial.id = Uuid::from_u128(0x2);
+    initial.name = "same".to_string();
+    let meta_path = write_meta_in(base_dir, &initial);
+    let meta_state = Mutex::new(initial);
+    let active_clients: Mutex<HashMap<u32, ClientHandle>> = Mutex::new(HashMap::new());
+
+    let resp = request_and_read_response(
+        &ControlMsg::RequestRename {
+            new_name: "same".to_string(),
+        },
+        &active_clients,
+        &meta_state,
+        &meta_path,
+    );
+
+    assert_eq!(resp, ControlResponse::Rename(RenameResponse::Unchanged));
+    // no-opなのでメモリ上のnameも変わらない
+    assert_eq!(meta_state.lock().unwrap().name, "same");
+}
+
+#[test]
+fn rename_request_with_existing_name_returns_conflict() {
+    let _guard = LOCK.lock().unwrap();
+
+    let dir = tempdir().unwrap();
+    let base_dir = dir.path();
+
+    // 別sessionが"taken"を使っている状態を作る
+    let mut other = dummy_meta();
+    other.id = Uuid::from_u128(0xAA);
+    other.name = "taken".to_string();
+    write_meta_in(base_dir, &other);
+
+    // 自sessionは"self"、これを"taken"にrenameしようとする
+    let mut self_meta = dummy_meta();
+    self_meta.id = Uuid::from_u128(0xBB);
+    self_meta.name = "self".to_string();
+    let self_path = write_meta_in(base_dir, &self_meta);
+    let meta_state = Mutex::new(self_meta);
+    let active_clients: Mutex<HashMap<u32, ClientHandle>> = Mutex::new(HashMap::new());
+
+    let resp = request_and_read_response(
+        &ControlMsg::RequestRename {
+            new_name: "taken".to_string(),
+        },
+        &active_clients,
+        &meta_state,
+        &self_path,
+    );
+
+    assert_eq!(resp, ControlResponse::Rename(RenameResponse::Conflict));
+    // 自metaは変更されない
+    assert_eq!(meta_state.lock().unwrap().name, "self");
+    let persisted = session::read_meta(&self_path).unwrap();
+    assert_eq!(persisted.name, "self");
+}
+
+#[test]
 fn query_current_client_returns_last_stdin_pid() {
-    // LAST_STDIN_CLIENTにセットしたpidがそのまま応答で返ることを確認
     let _guard = LOCK.lock().unwrap();
 
     let dir = tempdir().unwrap();
@@ -206,7 +294,6 @@ fn query_current_client_returns_last_stdin_pid() {
 
 #[test]
 fn query_current_client_returns_zero_when_no_stdin_yet() {
-    // 誰もまだstdinを送っていない状態ではpid=0で応答する
     let _guard = LOCK.lock().unwrap();
 
     let dir = tempdir().unwrap();
@@ -227,7 +314,7 @@ fn query_current_client_returns_zero_when_no_stdin_yet() {
 
 #[test]
 fn malformed_message_is_ignored() {
-    // 悪意ある接続への防御: read_control_msgが失敗しても handle は panic せず何も変更しない
+    // read_control_msgが失敗してもhandleはpanicせず何も変更しない
     let _guard = LOCK.lock().unwrap();
     LAST_STDIN_CLIENT.store(0, Ordering::SeqCst);
 
@@ -237,7 +324,7 @@ fn malformed_message_is_ignored() {
     let active_clients: Mutex<HashMap<u32, ClientHandle>> = Mutex::new(HashMap::new());
 
     let (mut client_side, mut server_side) = UnixStream::pair().unwrap();
-    // 意図的に途中で切って read_exact を EOF で失敗させる
+    // 意図的に途中で切ってread_exactをEOFで失敗させる
     let _ = client_side.write_all(&[0u8, 0u8]);
     drop(client_side);
     handle_control_message(&mut server_side, &active_clients, &meta_state, &meta_path);

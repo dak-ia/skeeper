@@ -16,7 +16,7 @@ fn run_returns_ok_when_no_sessions() {
     run().unwrap();
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn run_prunes_meta_with_server_pid_zero() {
     let _guard = crate::test_helpers::env_lock();

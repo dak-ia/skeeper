@@ -1,7 +1,7 @@
 use super::*;
 
 fn dummy_handle(cols: u16, rows: u16) -> ClientHandle {
-    let (event_tx, _event_rx) = mpsc::channel();
+    let (event_tx, _event_rx) = mpsc::sync_channel(16);
     // Receiverはdropされるがsendしないので実害なし。attach_idはtest内でユニークならOK
     ClientHandle {
         attach_id: 1,

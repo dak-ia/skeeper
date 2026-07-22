@@ -28,7 +28,7 @@ fn fixture_meta(attached_pids: Vec<u32>) -> SessionMeta {
 /// Receiverはテスト終了までscopeで保持しないとevent_tx.sendがErrになる。
 /// このtestではsendしないので実害はないが、Receiverの生存を明示する意図で一緒に返す
 fn make_client_handle() -> (ClientHandle, mpsc::Receiver<ClientEvent>) {
-    let (event_tx, event_rx) = mpsc::channel::<ClientEvent>();
+    let (event_tx, event_rx) = mpsc::sync_channel::<ClientEvent>(16);
     let handle = ClientHandle {
         attach_id: 1,
         cols: 80,
@@ -167,7 +167,7 @@ fn attach_state_guard_drop_skips_when_attach_id_mismatched() {
         armed: true,
     });
 
-    // slotは新attach所有のまま残り、meta_pids も削除されない
+    // slotは新attach所有のまま残り、meta_pidsも削除されない
     assert!(active_clients.lock().unwrap().contains_key(&7777));
     assert_eq!(
         meta_state.lock().unwrap().attached_client_pids,

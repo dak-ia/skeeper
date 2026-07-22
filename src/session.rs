@@ -25,8 +25,7 @@ pub struct SessionMeta {
 
 /// メタ情報を原子的にファイルに書き込む(tmpに書いてからrenameで置き換え)
 pub fn write_meta_atomic(path: &Path, meta: &SessionMeta) -> anyhow::Result<()> {
-    // <path>.tmp を作って完全に書ききってから rename する。
-    // rename はUnix上で原子的なのでpath側に中途半端なJSONは残らない
+    // Unixのrenameは原子的なので、path側に中途半端なJSONが残らない
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp_path = PathBuf::from(tmp);
@@ -45,9 +44,7 @@ pub fn read_meta(path: &Path) -> anyhow::Result<SessionMeta> {
 
 /// 指定ディレクトリ配下の全セッションメタを読み出す
 ///
-/// 存在しないディレクトリは空Vecとして扱う。
-/// パースに失敗するファイル(書込中や壊れたJSON)は黙って飛ばして残りを返す。
-/// 非jsonファイル(*.sock, *.tmp等)は対象外
+/// 存在しない/壊れたJSON/非json拡張子は無視して残りを返す
 pub fn list_all_meta(dir: &Path) -> anyhow::Result<Vec<SessionMeta>> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -68,7 +65,7 @@ pub fn list_all_meta(dir: &Path) -> anyhow::Result<Vec<SessionMeta>> {
     Ok(result)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn is_orphan(meta: &SessionMeta) -> anyhow::Result<bool> {
     if !is_pid_alive(meta.server_pid)? {
         return Ok(true);
@@ -82,12 +79,12 @@ pub fn is_orphan(meta: &SessionMeta) -> anyhow::Result<bool> {
     Ok(diff > time::Duration::seconds(1))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn is_orphan(_meta: &SessionMeta) -> anyhow::Result<bool> {
-    anyhow::bail!("Orphan detection is Linux-only for MVP-1")
+    anyhow::bail!("Orphan detection is not supported on this platform")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn is_pid_alive(pid: u32) -> anyhow::Result<bool> {
     use nix::errno::Errno;
     use nix::sys::signal;
@@ -126,7 +123,7 @@ pub(crate) fn process_start_time(pid: u32) -> anyhow::Result<Option<OffsetDateTi
 
 #[cfg(target_os = "linux")]
 pub(crate) fn process_start_time(pid: u32) -> anyhow::Result<Option<OffsetDateTime>> {
-    // commフィールドはprctl(PR_SET_NAME)で任意バイトが入り得るのでバイト列で読む。
+    // commフィールドはprctl(PR_SET_NAME)で任意バイトが入り得るのでバイト列で読む
     // 存在しないPIDはOk(None)で返し、呼び出し側で「孤児」扱いにする
     let raw = match std::fs::read(format!("/proc/{pid}/stat")) {
         Ok(bytes) => bytes,

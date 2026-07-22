@@ -128,7 +128,7 @@ fn atomic_write_does_not_leave_tmp_file() {
     assert!(!tmp_path.exists(), "tmp file should be gone after rename");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod orphan_tests {
     use super::*;
 
@@ -164,15 +164,13 @@ mod orphan_tests {
     #[test]
     fn nonexistent_pid_is_orphan() {
         let mut m = self_meta();
-        m.server_pid = 10_000_000; // 通常のPID_MAX_LIMIT (4194304) を超える値
+        m.server_pid = 10_000_000; // 通常のPID_MAX_LIMIT(4194304)を超える値
         assert!(is_orphan(&m).unwrap());
     }
 
     #[test]
     fn pid_zero_is_orphan() {
-        // pid=0はkill(2)で「呼び出し元のプロセスグループ全体」を指す特殊値。
-        // 生存判定に流用されるとメタが不正な状態(pid=0)の時に必ず「生きている」と誤判定するので、
-        // 早期に「存在しない」扱いにしていることを確認する
+        // pid=0はkill(2)特殊値なので早期に「存在しない」扱いにする(誤判定でsignal誤爆を防ぐ)
         let mut m = self_meta();
         m.server_pid = 0;
         assert!(is_orphan(&m).unwrap());

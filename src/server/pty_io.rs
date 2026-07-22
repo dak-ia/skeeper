@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::io::Read;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use super::{ClientEvent, ClientHandle, PTY_BUF_SIZE, SCROLLBACK_MAX_BYTES, Scrollback};
 
-/// ptyのstdoutを読み続けるバックグラウンドスレッド。
-/// 接続中の全clientにfanoutと、scrollback bufferへの追記をまとめて行う。
+/// ptyのstdoutを読み続けるバックグラウンドスレッド。全clientへfanoutとscrollback追記を担う
 #[allow(clippy::needless_pass_by_value)] // スレッド生存期間 = Arc所有期間として意図的
 pub(super) fn pty_reader_loop(
     mut reader: Box<dyn Read + Send>,
@@ -27,28 +27,35 @@ pub(super) fn pty_reader_loop(
                 }
                 sb.extend(&buf[..n]);
 
-                // fanout: 1つのVecをArcで共有し、各clientのchannelにclone senderで送る。
-                // send自体は非blocking(unbounded channel)なので、1台のattached_loopが
-                // 遅くても他のclientやscrollback更新はここで止まらない。
+                // Full=slow client(should_detachで切断)、Disconnected=attached_loop終了
                 let chunk = Arc::new(buf[..n].to_vec());
                 let guard = active_clients.lock().unwrap();
-                let mut failed: Vec<u32> = Vec::new();
+                // 同一pidで新規attachが割り込むと別slot所有者を誤削除するのでattach_idで判定
+                let mut failed: Vec<(u32, u64)> = Vec::new();
                 for (pid, handle) in guard.iter() {
-                    // send失敗はattached_loopがすでに終わっている(Receiver drop)ケース。
-                    // pidを覚えておいて後でmapから外し、以降のfanoutを絞る
-                    if handle
+                    match handle
                         .event_tx
-                        .send(ClientEvent::PtyChunk(Arc::clone(&chunk)))
-                        .is_err()
+                        .try_send(ClientEvent::PtyChunk(Arc::clone(&chunk)))
                     {
-                        failed.push(*pid);
+                        Ok(()) => {}
+                        Err(mpsc::TrySendError::Full(_)) => {
+                            handle
+                                .should_detach
+                                .store(true, std::sync::atomic::Ordering::Release);
+                            failed.push((*pid, handle.attach_id));
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => {
+                            failed.push((*pid, handle.attach_id));
+                        }
                     }
                 }
                 drop(guard);
                 if !failed.is_empty() {
                     let mut guard = active_clients.lock().unwrap();
-                    for pid in failed {
-                        guard.remove(&pid);
+                    for (pid, expected_aid) in failed {
+                        if guard.get(&pid).map(|h| h.attach_id) == Some(expected_aid) {
+                            guard.remove(&pid);
+                        }
                     }
                 }
                 drop(sb);

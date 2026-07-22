@@ -47,6 +47,20 @@ pub(super) const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// スクロールバックとして保持するpty出力のバイト数上限(≒数画面ぶん)
 pub(super) const SCROLLBACK_MAX_BYTES: usize = 128 * 1024;
 
+/// fanout queueの目安行数(SKEEPER_ATTACH_BUFFER_LINESで上書き可、100byte/行換算をPTY_BUF_SIZEメッセージ数に丸める)
+pub(super) const DEFAULT_ATTACH_BUFFER_LINES: usize = 10000;
+const APPROX_BYTES_PER_LINE: usize = 100;
+
+/// SKEEPER_ATTACH_BUFFER_LINESからper-client sync_channelのslot数を算出(invalidはdefault、最低1)
+pub(super) fn attach_buffer_capacity() -> usize {
+    let lines = std::env::var("SKEEPER_ATTACH_BUFFER_LINES")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_ATTACH_BUFFER_LINES);
+    (lines * APPROX_BYTES_PER_LINE / PTY_BUF_SIZE).max(1)
+}
+
 /// リングバッファ形式のスクロールバック。pty出力を捕えて、attach時に再生する
 pub(super) type Scrollback = Arc<Mutex<VecDeque<u8>>>;
 
@@ -68,6 +82,9 @@ pub(super) enum ClientEvent {
     ClientMsg(io::Result<crate::ipc::ClientMsg>),
     /// pty_reader_loopが読み取ったptyのchunk。Arcで包んで全client向けに共有する
     PtyChunk(Arc<Vec<u8>>),
+    /// control listenerが受けた `SwitchClient` を、対象clientのattached_loopに配送する。
+    /// attached_loopがServerMsg::SwitchToを流して自身のloopを閉じる
+    SwitchToRequested(PathBuf),
 }
 
 /// 接続中の各clientについて、pty出力を積むevent送信口と個別detachシグナルを持つ。
@@ -80,10 +97,11 @@ pub(super) struct ClientHandle {
     pub(super) cols: u16,
     pub(super) rows: u16,
     pub(super) should_detach: Arc<AtomicBool>,
-    pub(super) event_tx: mpsc::Sender<ClientEvent>,
+    /// 停滞client検出のためboundedにする。fullでのtry_send失敗を「slow client」と扱い切断経路へ
+    pub(super) event_tx: mpsc::SyncSender<ClientEvent>,
 }
 
-/// active_clients全体の最小 (cols, rows) を求める。0 clientならNone
+/// active_clients全体の最小(cols, rows)を求める。0 clientならNone
 pub(super) fn aggregate_min_size(acl: &HashMap<u32, ClientHandle>) -> Option<(u16, u16)> {
     let mut cols = u16::MAX;
     let mut rows = u16::MAX;
@@ -153,7 +171,6 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
     std::fs::set_permissions(&socket_path, owner_only.clone())?;
     std::fs::set_permissions(&ctl_socket_path, owner_only)?;
 
-    // pty
     let pty_system = native_pty_system();
     let pty_pair = pty_system
         .openpty(PtySize {
@@ -179,7 +196,6 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
     let self_started_at = session::process_start_time(self_pid)?
         .ok_or_else(|| anyhow!("Failed to get own process start time"))?;
 
-    // メタ初期化
     let meta_initial = SessionMeta {
         id,
         name,
@@ -204,14 +220,12 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
         .map_err(|e| anyhow!("Failed to take pty writer: {e}"))?;
     let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(pty_pair.master));
 
-    // 共有状態
     let active_clients: Arc<Mutex<HashMap<u32, ClientHandle>>> =
         Arc::new(Mutex::new(HashMap::new()));
     // metaはcontrol_listener_loop(別スレッド)からもrename処理で書き換えるためArc
     let meta: Arc<Mutex<SessionMeta>> = Arc::new(Mutex::new(meta_initial));
     let child_exited = Arc::new(AtomicBool::new(false));
     let child_status: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
-    // スクロールバック: pty出力の直近ぶんを保持し、新規attach時に再生する
     let scrollback: Scrollback =
         Arc::new(Mutex::new(VecDeque::with_capacity(SCROLLBACK_MAX_BYTES)));
     // writerも複数client threadから同時書き込みされるためArc<Mutex<>>で共有する
@@ -234,7 +248,7 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
         thread::spawn(move || pty_reader_loop(master_reader, active_clients, scrollback));
     }
 
-    // 常時実行のバックグラウンドスレッド: 子プロセス終了を監視して exit code を保存
+    // 常時実行のバックグラウンドスレッド: 子プロセス終了を監視してexit codeを保存
     {
         let child_exited = Arc::clone(&child_exited);
         let child_status = Arc::clone(&child_status);

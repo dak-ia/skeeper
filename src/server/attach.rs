@@ -20,6 +20,7 @@ use super::guards::AttachStateGuard;
 use super::{
     ATTACH_ID_COUNTER, ClientEvent, ClientHandle, HANDSHAKE_READ_TIMEOUT, HandleOutcome,
     LAST_STDIN_CLIENT, POLL_INTERVAL, SOCKET_WRITE_TIMEOUT, TERM_REQUESTED, aggregate_min_size,
+    attach_buffer_capacity,
 };
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -34,10 +35,7 @@ pub(super) fn handle_client(
     child_exited: &AtomicBool,
     child_status: &Mutex<Option<i32>>,
 ) -> Result<HandleOutcome> {
-    // 3つのhandleを用意:
-    //   read_stream    : client→server読取り(handshake + attach内reader thread)
-    //   shutdown_handle: Mutex外からshutdownするための独立clone(deadlock回避のキモ)
-    //   write_stream   : 書き込み共有(Arc<Mutex<>>でsnapshot再生/PtyChunk配送/最終メッセージ全部から使う)
+    // shutdown_handleはMutex外からshutdownする用の独立clone(join deadlock回避)
     let mut read_stream = stream.try_clone()?;
     let shutdown_handle = stream.try_clone()?;
     stream.set_write_timeout(Some(SOCKET_WRITE_TIMEOUT))?;
@@ -81,8 +79,9 @@ pub(super) fn handle_client(
     }
 
     let should_detach = Arc::new(AtomicBool::new(false));
-    // client読み取り・pty出力の両方をこのchannelに集めてattached_loopで処理する
-    let (event_tx, event_rx) = mpsc::channel::<ClientEvent>();
+    // client読み取り・pty出力の両方をこのchannelに集めてattached_loopで処理する。
+    // slow client検出のためbounded sync_channel(fullでtry_send失敗→切断経路)
+    let (event_tx, event_rx) = mpsc::sync_channel::<ClientEvent>(attach_buffer_capacity());
     // このattach一意のid。cleanup時にslot所有者かどうかの判定に使う(pid再利用/同一pid再attach対策)
     let attach_id = ATTACH_ID_COUNTER.fetch_add(1, Ordering::AcqRel);
 
@@ -259,8 +258,7 @@ fn attached_loop(
                 let _ = w.flush();
             }
             Ok(ClientEvent::ClientMsg(Ok(ClientMsg::Resize { cols, rows }))) => {
-                // 自clientのサイズを更新してから全体minでresize。
-                // 単一clientしか居ないケースでは実質「送られた通りに合わせる」
+                // 自client分を更新してから全clientのminでresize
                 let mut acl = active_clients.lock().unwrap();
                 if let Some(h) = acl.get_mut(&self_pid) {
                     h.cols = cols;
@@ -279,12 +277,17 @@ fn attached_loop(
                 return HandleOutcome::Detached;
             }
             Ok(ClientEvent::PtyChunk(bytes)) => {
-                // Arcで共有されたchunkをclient socketに書く。ここでの遅延は当該clientだけに影響し、
-                // pty_readerや他clientのfanoutは詰まらない(mpsc unboundedのため)
+                // 遅延は当該clientだけに影響(bounded sync_channelで他clientやpty_readerに波及しない)
                 let mut w = write_stream.lock().unwrap();
                 if ipc::write_server_msg(&mut *w, &ServerMsg::Stdout((*bytes).clone())).is_err() {
                     return HandleOutcome::Disconnected;
                 }
+            }
+            Ok(ClientEvent::SwitchToRequested(target_socket_path)) => {
+                // clientに送出後にDetachedで抜ける(client側でSwitchTo受信→再attach)
+                let mut w = write_stream.lock().unwrap();
+                let _ = ipc::write_server_msg(&mut *w, &ServerMsg::SwitchTo { target_socket_path });
+                return HandleOutcome::Detached;
             }
             Ok(ClientEvent::ClientMsg(Err(_))) | Err(RecvTimeoutError::Disconnected) => {
                 return HandleOutcome::Disconnected;

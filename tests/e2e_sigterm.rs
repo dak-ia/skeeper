@@ -47,18 +47,18 @@ fn client_detach_message_returns_detachack() -> Result<()> {
         sleep(Duration::from_millis(50));
     }
 
-    // ClientMsg::Detach を送信し、server側で DetachAck が返ることを確認
+    // ClientMsg::Detachを送信し、server側でDetachAckが返ることを確認
     ipc::write_client_msg(&mut stream, &ClientMsg::Detach)?;
 
-    // Detach 応答を待つ。ptyのstdoutが混ざる可能性があるので Stdout はスキップして DetachAck を探す
+    // Detach応答を待つ。ptyのstdoutが混ざる可能性があるのでStdoutはスキップしてDetachAckを探す
     let start = Instant::now();
     loop {
         match ipc::read_server_msg(&mut stream)? {
             ServerMsg::DetachAck => break,
             ServerMsg::SessionEnded { .. } => bail!("unexpected SessionEnded before DetachAck"),
             ServerMsg::Stdout(_) => {}
-            other @ ServerMsg::HelloOk { .. } => {
-                bail!("unexpected HelloOk after handshake: {other:?}")
+            other @ (ServerMsg::HelloOk { .. } | ServerMsg::SwitchTo { .. }) => {
+                bail!("unexpected message after handshake: {other:?}")
             }
         }
         if start.elapsed() >= Duration::from_secs(5) {
@@ -82,7 +82,7 @@ fn client_detach_message_returns_detachack() -> Result<()> {
 }
 
 /// shellがexitするケースでSessionEndedが届くことを検証する。
-/// `/bin/false`のような即exitでは serverがcleanup済で connect/handshake すら失敗する経路もある。
+/// `/bin/false`のような即exitではserverがcleanup済でconnect/handshakeすら失敗する経路もある。
 /// その場合はEOF/reset/broken pipeのみshell終了観測として許容し、timeout等は失敗扱いにする
 #[test]
 fn session_ended_or_conn_reset_when_shell_exits() -> Result<()> {
@@ -105,14 +105,16 @@ fn session_ended_or_conn_reset_when_shell_exits() -> Result<()> {
         bail!("handshake failed with unexpected error: {e}");
     }
 
-    // SessionEnded が届くか、read側でEOF/reset/broken pipeならshell終了の観測として扱う
+    // SessionEndedが届くか、read側でEOF/reset/broken pipeならshell終了の観測として扱う
     let start = Instant::now();
     loop {
         match ipc::read_server_msg(&mut stream) {
             Ok(ServerMsg::SessionEnded { .. }) => return Ok(()),
             Ok(ServerMsg::DetachAck) => bail!("unexpected DetachAck for exiting shell"),
             Ok(ServerMsg::Stdout(_)) => {}
-            Ok(other @ ServerMsg::HelloOk { .. }) => bail!("unexpected HelloOk: {other:?}"),
+            Ok(other @ (ServerMsg::HelloOk { .. } | ServerMsg::SwitchTo { .. })) => {
+                bail!("unexpected message: {other:?}")
+            }
             Err(e) if is_expected_close(e.kind()) => return Ok(()),
             Err(e) => bail!("unexpected read error: {e} (kind={:?})", e.kind()),
         }

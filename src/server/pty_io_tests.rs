@@ -24,7 +24,7 @@ fn evicts_oldest_bytes_when_scrollback_full() {
     // SCROLLBACK_MAX_BYTES超のデータを流し、上限を保ったまま古いバイトから捨てられることを検証
     let total = SCROLLBACK_MAX_BYTES + PTY_BUF_SIZE * 2;
     // 位置を追えるように251(素数)で循環する繰り返しにして、末尾一致で検証する
-    // i % 251 < 251 なのでu8に必ず収まる
+    // i % 251 < 251なのでu8に必ず収まる
     let data: Vec<u8> = (0..total).map(|i| u8::try_from(i % 251).unwrap()).collect();
 
     let reader: Box<dyn std::io::Read + Send> = Box::new(Cursor::new(data.clone()));
@@ -47,8 +47,8 @@ fn fans_out_pty_chunks_to_all_client_channels() {
     let reader: Box<dyn std::io::Read + Send> = Box::new(Cursor::new(data.clone()));
     let sb: Scrollback = Arc::new(Mutex::new(VecDeque::new()));
 
-    let (tx1, rx1) = mpsc::channel::<ClientEvent>();
-    let (tx2, rx2) = mpsc::channel::<ClientEvent>();
+    let (tx1, rx1) = mpsc::sync_channel::<ClientEvent>(16);
+    let (tx2, rx2) = mpsc::sync_channel::<ClientEvent>(16);
     let mut map: HashMap<u32, ClientHandle> = HashMap::new();
     map.insert(
         11,
@@ -81,12 +81,16 @@ fn fans_out_pty_chunks_to_all_client_channels() {
     let ev1 = rx1.try_recv().expect("client 1 should receive PtyChunk");
     match ev1 {
         ClientEvent::PtyChunk(bytes) => assert_eq!(bytes.as_slice(), data.as_slice()),
-        ClientEvent::ClientMsg(_) => panic!("expected PtyChunk, got ClientMsg"),
+        ClientEvent::ClientMsg(_) | ClientEvent::SwitchToRequested(_) => {
+            panic!("expected PtyChunk, got other event")
+        }
     }
     let ev2 = rx2.try_recv().expect("client 2 should receive PtyChunk");
     match ev2 {
         ClientEvent::PtyChunk(bytes) => assert_eq!(bytes.as_slice(), data.as_slice()),
-        ClientEvent::ClientMsg(_) => panic!("expected PtyChunk, got ClientMsg"),
+        ClientEvent::ClientMsg(_) | ClientEvent::SwitchToRequested(_) => {
+            panic!("expected PtyChunk, got other event")
+        }
     }
 }
 
@@ -97,8 +101,8 @@ fn removes_client_whose_channel_receiver_is_dropped() {
     let reader: Box<dyn std::io::Read + Send> = Box::new(Cursor::new(data.clone()));
     let sb: Scrollback = Arc::new(Mutex::new(VecDeque::new()));
 
-    let (tx_alive, rx_alive) = mpsc::channel::<ClientEvent>();
-    let (tx_dead, rx_dead) = mpsc::channel::<ClientEvent>();
+    let (tx_alive, rx_alive) = mpsc::sync_channel::<ClientEvent>(16);
+    let (tx_dead, rx_dead) = mpsc::sync_channel::<ClientEvent>(16);
     // dead側のReceiverを先に落として、send時にErrになる状態にする
     drop(rx_dead);
 
@@ -130,7 +134,9 @@ fn removes_client_whose_channel_receiver_is_dropped() {
     let ev = rx_alive.try_recv().expect("alive client should receive");
     match ev {
         ClientEvent::PtyChunk(bytes) => assert_eq!(bytes.as_slice(), data.as_slice()),
-        ClientEvent::ClientMsg(_) => panic!("expected PtyChunk"),
+        ClientEvent::ClientMsg(_) | ClientEvent::SwitchToRequested(_) => {
+            panic!("expected PtyChunk, got other event")
+        }
     }
 
     let map_after = ac.lock().unwrap();

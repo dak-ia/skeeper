@@ -19,10 +19,7 @@ pub(crate) fn run(args: ListArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // 新しい順(作成日時降順)
     sessions.sort_by_key(|s| std::cmp::Reverse(s.created_at));
-
-    // ローカルoffsetを取れる環境ではローカル時刻で表示する
     let offset = display::local_offset();
 
     // pty内から呼ばれたときだけ、自分のsessionのserverに「今stdin送ってる自分」を問い合わせる。
@@ -83,7 +80,10 @@ fn current_session_stdin_pid(base_dir: &Path) -> Option<u32> {
     let ctl_path = paths::ctl_path(base_dir, &id);
     let mut stream = UnixStream::connect(&ctl_path).ok()?;
     ipc::write_control_msg(&mut stream, &ControlMsg::QueryCurrentClient).ok()?;
-    let ControlResponse::CurrentClient { pid } = ipc::read_control_response(&mut stream).ok()?;
+    let ControlResponse::CurrentClient { pid } = ipc::read_control_response(&mut stream).ok()?
+    else {
+        return None;
+    };
     // pid=0は「まだ誰もstdin送っていない」状態。マーカーを付ける対象がいない
     if pid == 0 { None } else { Some(pid) }
 }

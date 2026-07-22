@@ -17,7 +17,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
     // ユーザーに「detach対象がない」ことを早めに伝えるためclient側でもチェックする
     let meta_path = paths::meta_path(&base_dir, &session_id);
     let meta = session::read_meta(&meta_path).context("Failed to read session metadata")?;
-    if meta.attached_client_pids.is_empty() {
+    if meta.attached_clients.is_empty() {
         anyhow::bail!("No client is currently attached");
     }
 

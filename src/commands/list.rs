@@ -42,7 +42,7 @@ pub(crate) fn run(args: ListArgs) -> anyhow::Result<()> {
         let last_attached = s
             .last_attached_at
             .map_or_else(|| "-".to_string(), |t| display::format_local(t, offset));
-        let n = s.attached_client_pids.len();
+        let n = s.attached_clients.len();
         // 0=detached, 1=attached, 2以上=attached (N)。formatは複数client時のみ
         let state_label: std::borrow::Cow<'_, str> = match n {
             0 => "detached".into(),
@@ -61,11 +61,9 @@ pub(crate) fn run(args: ListArgs) -> anyhow::Result<()> {
         );
 
         // --long指定時のみ、attach中clientのpidを補助行として出す(未接続なら追加行なし)
-        if args.long && !s.attached_client_pids.is_empty() {
-            println!(
-                "  Clients: {}",
-                format_clients(&s.attached_client_pids, current_pid)
-            );
+        if args.long && !s.attached_clients.is_empty() {
+            let pids: Vec<u32> = s.attached_clients.iter().map(|c| c.pid).collect();
+            println!("  Clients: {}", format_clients(&pids, current_pid));
         }
     }
 

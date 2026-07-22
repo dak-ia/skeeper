@@ -11,7 +11,9 @@ fn sample() -> SessionMeta {
         last_attached_at: Some(datetime!(2026-07-04 13:00:00 UTC)),
         server_pid: 12345,
         server_started_at: datetime!(2026-07-04 12:34:56.789012345 UTC),
-        attached_client_pids: Vec::new(),
+        schema_version: SCHEMA_VERSION_CURRENT,
+        ipc_protocol_version: crate::ipc::IPC_PROTOCOL_VERSION,
+        attached_clients: Vec::new(),
     }
 }
 
@@ -39,10 +41,10 @@ fn preserves_nanosecond_precision() {
 fn nulls_optionals_when_none() {
     let mut m = sample();
     m.last_attached_at = None;
-    m.attached_client_pids = Vec::new();
+    m.attached_clients = Vec::new();
     let json = serde_json::to_string(&m).unwrap();
     assert!(json.contains("\"last_attached_at\":null"));
-    assert!(json.contains("\"attached_client_pids\":[]"));
+    assert!(json.contains("\"attached_clients\":[]"));
 }
 
 #[test]
@@ -117,6 +119,38 @@ fn list_all_meta_skips_corrupted_json() {
 }
 
 #[test]
+fn read_meta_migrates_v1_schema_silently() {
+    // schema_version未存在(=v1扱い)のJSONを、silent migrationでClientInfo付きの
+    // 最新schemaに引き上げる。tty/ssh_connectionはunknown、attached_atはcreated_atで補う
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v1.json");
+    let json = r#"{
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "name": "legacy",
+        "cwd": "/tmp",
+        "shell": "/bin/sh",
+        "created_at": "2000-01-02T03:04:05Z",
+        "last_attached_at": null,
+        "server_pid": 12345,
+        "server_started_at": "2000-01-02T03:04:05Z",
+        "attached_client_pids": [111, 222]
+    }"#;
+    std::fs::write(&path, json).unwrap();
+    let meta = read_meta(&path).unwrap();
+    assert_eq!(meta.schema_version, SCHEMA_VERSION_CURRENT);
+    // v1にはIPC versionという概念自体が無いのでunknown扱いの0で埋める
+    assert_eq!(meta.ipc_protocol_version, 0);
+    assert_eq!(meta.last_attached_at, None);
+    assert_eq!(meta.attached_clients.len(), 2);
+    assert_eq!(meta.attached_clients[0].pid, 111);
+    assert_eq!(meta.attached_clients[0].tty, None);
+    assert_eq!(meta.attached_clients[0].ssh_connection, None);
+    // v1には個別のattached_atが無いのでcreated_atで補う
+    assert_eq!(meta.attached_clients[0].attached_at, meta.created_at);
+    assert_eq!(meta.attached_clients[1].pid, 222);
+}
+
+#[test]
 fn atomic_write_does_not_leave_tmp_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("meta.json");
@@ -144,7 +178,9 @@ mod orphan_tests {
             last_attached_at: None,
             server_pid: self_pid,
             server_started_at: start,
-            attached_client_pids: Vec::new(),
+            schema_version: SCHEMA_VERSION_CURRENT,
+            ipc_protocol_version: crate::ipc::IPC_PROTOCOL_VERSION,
+            attached_clients: Vec::new(),
         }
     }
 

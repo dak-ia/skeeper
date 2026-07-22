@@ -12,7 +12,7 @@ use time::macros::datetime;
 use uuid::Uuid;
 
 use crate::ipc::{self, ClientMsg};
-use crate::session::SessionMeta;
+use crate::session::{self, SessionMeta};
 
 fn fixture_meta() -> SessionMeta {
     let fixed = datetime!(2000-01-02 03:04:05 UTC);
@@ -25,7 +25,9 @@ fn fixture_meta() -> SessionMeta {
         last_attached_at: None,
         server_pid: 1,
         server_started_at: fixed,
-        attached_client_pids: Vec::new(),
+        schema_version: session::SCHEMA_VERSION_CURRENT,
+        ipc_protocol_version: crate::ipc::IPC_PROTOCOL_VERSION,
+        attached_clients: Vec::new(),
     }
 }
 
@@ -73,9 +75,9 @@ fn handle_client_disconnects_when_client_sends_non_hello() {
     .expect("handle_client");
 
     assert!(matches!(outcome, HandleOutcome::Disconnected));
-    // 拒否時にサーバは状態を触らないこと(active_clients未登録、meta.attached_client_pidsそのまま)
+    // 拒否時にサーバは状態を触らないこと(active_clients未登録、meta.attached_clientsそのまま)
     assert!(active_clients.lock().unwrap().is_empty());
-    assert!(meta.lock().unwrap().attached_client_pids.is_empty());
+    assert!(meta.lock().unwrap().attached_clients.is_empty());
     // meta_pathは書き込まれていない(HelloOk成功後にしか書かない)
     assert!(!meta_path.exists());
 

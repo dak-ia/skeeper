@@ -18,6 +18,8 @@ fn client_hello_roundtrip() {
         client_pid: 42,
         cols: 80,
         rows: 24,
+        tty: Some("/dev/pts/1".to_string()),
+        ssh_connection: Some("1.2.3.4 22 5.6.7.8 22".to_string()),
     });
 }
 

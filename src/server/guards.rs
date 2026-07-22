@@ -24,7 +24,7 @@ impl Drop for SessionFileGuard<'_> {
     }
 }
 
-/// 各clientのattach中に持っている共有状態(active_clients登録 + meta.attached_client_pids)を、
+/// 各clientのattach中に持っている共有状態(active_clients登録 + meta.attached_clients)を、
 /// 早期return/パニックのどの経路でも一度だけ確実に解除するためのRAII guard
 pub(super) struct AttachStateGuard<'a> {
     pub(super) client_pid: u32,
@@ -72,7 +72,7 @@ impl Drop for AttachStateGuard<'_> {
         };
         if is_still_current {
             let mut m = self.meta.lock().unwrap();
-            m.attached_client_pids.retain(|&p| p != self.client_pid);
+            m.attached_clients.retain(|c| c.pid != self.client_pid);
             let _ = session::write_meta_atomic(self.meta_path, &m);
         }
     }

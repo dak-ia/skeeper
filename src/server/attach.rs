@@ -55,6 +55,8 @@ pub(super) fn handle_client(
         client_pid,
         cols,
         rows,
+        tty,
+        ssh_connection,
     } = hello
     else {
         let _ = shutdown_handle.shutdown(Shutdown::Both);
@@ -85,12 +87,12 @@ pub(super) fn handle_client(
     // このattach一意のid。cleanup時にslot所有者かどうかの判定に使う(pid再利用/同一pid再attach対策)
     let attach_id = ATTACH_ID_COUNTER.fetch_add(1, Ordering::AcqRel);
 
-    // ---- scrollback snapshot + active_clients登録 + pty size集約(atomic) ----
+    // ---- scrollback snapshot + active_clients登録 + pty size集約 + meta更新(atomic) ----
     let snapshot: Vec<u8> = {
         let sb = scrollback.lock().unwrap();
         let mut acl = active_clients.lock().unwrap();
         let snap: Vec<u8> = sb.iter().copied().collect();
-        // 同一pidが既にmapに残っている場合、古い側にdetachシグナルを立てて置換する
+        drop(sb);
         if let Some(old) = acl.remove(&client_pid) {
             old.should_detach.store(true, Ordering::Release);
         }
@@ -112,18 +114,19 @@ pub(super) fn handle_client(
                 pixel_height: 0,
             });
         }
+        let now = OffsetDateTime::now_utc();
+        let mut m = meta.lock().unwrap();
+        m.attached_clients.retain(|c| c.pid != client_pid);
+        m.attached_clients.push(session::ClientInfo {
+            pid: client_pid,
+            tty,
+            ssh_connection,
+            attached_at: now,
+        });
+        m.last_attached_at = Some(now);
+        let _ = session::write_meta_atomic(meta_path, &m);
         snap
     };
-
-    // ---- メタ更新(以降の早期returnはguardが後始末) ----
-    {
-        let mut m = meta.lock().unwrap();
-        if !m.attached_client_pids.contains(&client_pid) {
-            m.attached_client_pids.push(client_pid);
-        }
-        m.last_attached_at = Some(OffsetDateTime::now_utc());
-        let _ = session::write_meta_atomic(meta_path, &m);
-    }
     let mut attach_guard = AttachStateGuard {
         client_pid,
         attach_id,
@@ -202,7 +205,7 @@ pub(super) fn handle_client(
     };
     if is_still_current {
         let mut m = meta.lock().unwrap();
-        m.attached_client_pids.retain(|&p| p != client_pid);
+        m.attached_clients.retain(|c| c.pid != client_pid);
         let _ = session::write_meta_atomic(meta_path, &m);
     }
 

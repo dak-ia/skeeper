@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::cli::NewArgs;
 use crate::server::{self, ServerRunArgs};
 use crate::session::SessionMeta;
-use crate::{client, name_gen, paths, runtime_lock, session};
+use crate::{client, ipc, name_gen, paths, runtime_lock, session};
 
 use super::current_session_id;
 
@@ -79,7 +79,9 @@ pub(crate) fn run(args: NewArgs) -> anyhow::Result<()> {
             last_attached_at: None,
             server_pid: 0,
             server_started_at: OffsetDateTime::UNIX_EPOCH,
-            attached_client_pids: Vec::new(),
+            schema_version: session::SCHEMA_VERSION_CURRENT,
+            ipc_protocol_version: ipc::IPC_PROTOCOL_VERSION,
+            attached_clients: Vec::new(),
         };
         session::write_meta_atomic(&meta_path, &reservation)?;
         name

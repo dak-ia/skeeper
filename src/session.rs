@@ -6,6 +6,9 @@ use uuid::Uuid;
 
 pub type SessionId = Uuid;
 
+/// SessionMetaのschemaバージョン。旧schema(pidsのVecのみ)は1、ClientInfo拡張後は2
+pub const SCHEMA_VERSION_CURRENT: u32 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub id: SessionId,
@@ -19,8 +22,80 @@ pub struct SessionMeta {
     pub server_pid: u32,
     #[serde(with = "time::serde::rfc3339")]
     pub server_started_at: OffsetDateTime,
+    /// このmetaを書いたserverが使うschemaのversion。読み側でmigrationの分岐に使う
+    #[serde(default = "default_schema_version_old")]
+    pub schema_version: u32,
+    /// このserverが話すIPCプロトコルのversion。clientはlistで差分を検知して"outdated"表示できる
     #[serde(default)]
-    pub attached_client_pids: Vec<u32>,
+    pub ipc_protocol_version: u32,
+    #[serde(default)]
+    pub attached_clients: Vec<ClientInfo>,
+}
+
+/// attach中の1 clientの情報。pidだけでは同一session内に同居する複数attachを識別できないので、
+/// tty/SSH_CONNECTION/attach時刻でどのterminalからかまで示せるようにする
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientInfo {
+    pub pid: u32,
+    #[serde(default)]
+    pub tty: Option<String>,
+    #[serde(default)]
+    pub ssh_connection: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub attached_at: OffsetDateTime,
+}
+
+fn default_schema_version_old() -> u32 {
+    1
+}
+
+/// 旧schema(v1)のmetaをserdeで読むためのraw構造。attached_clientsは持たずattached_client_pidsを持つ
+#[derive(Deserialize)]
+struct MetaV1 {
+    id: SessionId,
+    name: String,
+    cwd: PathBuf,
+    shell: PathBuf,
+    #[serde(with = "time::serde::rfc3339")]
+    created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    last_attached_at: Option<OffsetDateTime>,
+    server_pid: u32,
+    #[serde(with = "time::serde::rfc3339")]
+    server_started_at: OffsetDateTime,
+    #[serde(default)]
+    attached_client_pids: Vec<u32>,
+}
+
+impl MetaV1 {
+    fn upgrade(self) -> SessionMeta {
+        // v1にはtty/ssh/attach時刻が無いので、pidだけ引き継いで既知情報で補う
+        let attached_clients = self
+            .attached_client_pids
+            .into_iter()
+            .map(|pid| ClientInfo {
+                pid,
+                tty: None,
+                ssh_connection: None,
+                attached_at: self.created_at,
+            })
+            .collect();
+        SessionMeta {
+            id: self.id,
+            name: self.name,
+            cwd: self.cwd,
+            shell: self.shell,
+            created_at: self.created_at,
+            last_attached_at: self.last_attached_at,
+            server_pid: self.server_pid,
+            server_started_at: self.server_started_at,
+            schema_version: SCHEMA_VERSION_CURRENT,
+            // v1にはIPC versionという概念が無く、書き手のprotocolも不明。
+            // 0を"unknown"のsentinelとして残し、現行の値を偽らない
+            ipc_protocol_version: 0,
+            attached_clients,
+        }
+    }
 }
 
 /// メタ情報を原子的にファイルに書き込む(tmpに書いてからrenameで置き換え)
@@ -35,11 +110,17 @@ pub fn write_meta_atomic(path: &Path, meta: &SessionMeta) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// メタ情報をファイルから読み込む
+/// メタ情報をファイルから読み込む。旧schema(v1)はsilent auto migrationで新schemaに変換する
 pub fn read_meta(path: &Path) -> anyhow::Result<SessionMeta> {
     let json = std::fs::read_to_string(path)?;
+    // 現行schema(SCHEMA_VERSION_CURRENT)以上ならそのまま。未来のversion(v3+)も
+    // 現状のfieldさえ揃っていれば読める前提で受け入れる(壊れれば下のfrom_strが即失敗する)
     let meta: SessionMeta = serde_json::from_str(&json)?;
-    Ok(meta)
+    if meta.schema_version >= SCHEMA_VERSION_CURRENT {
+        return Ok(meta);
+    }
+    let v1: MetaV1 = serde_json::from_str(&json)?;
+    Ok(v1.upgrade())
 }
 
 /// 指定ディレクトリ配下の全セッションメタを読み出す

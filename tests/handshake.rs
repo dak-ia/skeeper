@@ -26,7 +26,7 @@ fn meta_shows_attached_after_handshake() -> Result<()> {
 
     // 初期状態: 未接続
     let before = session::read_meta(&server.meta_path())?;
-    assert!(before.attached_client_pids.is_empty());
+    assert!(before.attached_clients.is_empty());
     assert_eq!(before.last_attached_at, None);
 
     let mut stream = UnixStream::connect(server.socket_path())?;
@@ -36,12 +36,13 @@ fn meta_shows_attached_after_handshake() -> Result<()> {
     // meta atomic write完了まで少し待つ
     sleep(Duration::from_millis(200));
 
-    // handshake後: attached_client_pidsとlast_attached_atが埋まっている
+    // handshake後: attached_clientsとlast_attached_atが埋まっている
     let after = session::read_meta(&server.meta_path())?;
+    let pids: Vec<u32> = after.attached_clients.iter().map(|c| c.pid).collect();
     assert_eq!(
-        after.attached_client_pids,
+        pids,
         vec![std::process::id()],
-        "attached_client_pids should contain our process id after handshake"
+        "attached_clients should contain our process id after handshake"
     );
     assert!(
         after.last_attached_at.is_some(),
@@ -69,7 +70,7 @@ fn multi_client_both_receive_pty_output() -> Result<()> {
     let start = Instant::now();
     loop {
         if let Ok(m) = session::read_meta(&server.meta_path())
-            && m.attached_client_pids.contains(&pid_a)
+            && m.attached_clients.iter().any(|c| c.pid == pid_a)
         {
             break;
         }
@@ -86,8 +87,8 @@ fn multi_client_both_receive_pty_output() -> Result<()> {
     let start = Instant::now();
     loop {
         if let Ok(m) = session::read_meta(&server.meta_path())
-            && m.attached_client_pids.contains(&pid_a)
-            && m.attached_client_pids.contains(&pid_b)
+            && m.attached_clients.iter().any(|c| c.pid == pid_a)
+            && m.attached_clients.iter().any(|c| c.pid == pid_b)
         {
             break;
         }
@@ -146,8 +147,8 @@ fn individual_detach_via_client_close() -> Result<()> {
     let start = Instant::now();
     loop {
         if let Ok(m) = session::read_meta(&server.meta_path())
-            && m.attached_client_pids.contains(&pid_a)
-            && m.attached_client_pids.contains(&pid_b)
+            && m.attached_clients.iter().any(|c| c.pid == pid_a)
+            && m.attached_clients.iter().any(|c| c.pid == pid_b)
         {
             break;
         }
@@ -161,13 +162,13 @@ fn individual_detach_via_client_close() -> Result<()> {
     c1.shutdown(std::net::Shutdown::Both)?;
     drop(c1);
 
-    // meta.attached_client_pidsからpid_aだけが外れるのを待つ
+    // meta.attached_clientsからpid_aだけが外れるのを待つ
     let start = Instant::now();
     let mut ok = false;
     while start.elapsed() < Duration::from_secs(3) {
         if let Ok(m) = session::read_meta(&server.meta_path())
-            && !m.attached_client_pids.contains(&pid_a)
-            && m.attached_client_pids.contains(&pid_b)
+            && !m.attached_clients.iter().any(|c| c.pid == pid_a)
+            && m.attached_clients.iter().any(|c| c.pid == pid_b)
         {
             ok = true;
             break;
@@ -176,7 +177,7 @@ fn individual_detach_via_client_close() -> Result<()> {
     }
     assert!(
         ok,
-        "expected pid_a to be removed and pid_b to remain in meta.attached_client_pids"
+        "expected pid_a to be removed and pid_b to remain in meta.attached_clients"
     );
 
     // c2はまだ生きている: stdinがpty経由でechoされてくる

@@ -12,7 +12,9 @@ fn sample_meta(id: Uuid) -> session::SessionMeta {
         last_attached_at: None,
         server_pid: 0,
         server_started_at: OffsetDateTime::UNIX_EPOCH,
-        attached_client_pids: Vec::new(),
+        schema_version: session::SCHEMA_VERSION_CURRENT,
+        ipc_protocol_version: crate::ipc::IPC_PROTOCOL_VERSION,
+        attached_clients: Vec::new(),
     }
 }
 

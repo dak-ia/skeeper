@@ -19,11 +19,7 @@ pub(crate) fn run(args: KillArgs) -> anyhow::Result<()> {
     let sessions = session::list_all_meta(&base_dir).unwrap_or_default();
     let skip_confirm = args.yes;
 
-    // 対象を決定する:
-    //   1) -a all             → 全セッション、y/N確認
-    //   2) name指定           → その1件、確認不要
-    //   3) 引数なし+セッション内 → 現セッション、y/N確認
-    //   4) 引数なし+セッション外 → TUIで複数選択、選択自体が確認代わり
+    // TUI経由(4番目のarm)は選択自体が確認代わりなのでrequires_confirmation=false
     let (targets, requires_confirmation) = if args.all {
         if sessions.is_empty() {
             println!("No sessions to kill");
@@ -90,9 +86,8 @@ fn kill_one_session(base_dir: &Path, meta: &SessionMeta) -> anyhow::Result<()> {
     let ctl = paths::ctl_path(base_dir, &meta.id);
     let meta_path = paths::meta_path(base_dir, &meta.id);
 
-    // pid==0はkill(2)で自プロセスグループ全体への配送になり、is_orphanの結果に関わらず
-    // 親シェルまで巻き添えにするので絶対にsignalを送らない。
-    // is_orphanは非対応OS(macOS等)ではErr(bail)を返すのでunwrap_or(false)で通常経路に流す
+    // pid==0はkill(2)で自プロセスグループ全体に配送され親シェルまで巻き込むので絶対にsignal送らない
+    // is_orphanは非対応OSではErr(bail)を返すのでunwrap_or(false)で通常経路に流す
     let orphan_or_zero = meta.server_pid == 0 || session::is_orphan(meta).unwrap_or(false);
     if orphan_or_zero {
         let _ = std::fs::remove_file(&ctl);

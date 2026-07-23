@@ -84,19 +84,19 @@ fn list_and_ls_alias_both_resolve_to_list() {
 }
 
 #[test]
-fn list_with_long_flag() {
-    let cli = parse(&["skeeper", "list", "--long"]);
+fn list_detail_long_form_sets_detail_true() {
+    let cli = parse(&["skeeper", "list", "--detail"]);
     match cli.command {
-        Some(Command::List(args)) => assert!(args.long),
+        Some(Command::List(args)) => assert!(args.detail),
         other => panic!("expected List, got {other:?}"),
     }
 }
 
 #[test]
-fn list_short_l_flag() {
-    let cli = parse(&["skeeper", "list", "-l"]);
+fn list_detail_short_form_sets_detail_true() {
+    let cli = parse(&["skeeper", "list", "-d"]);
     match cli.command {
-        Some(Command::List(args)) => assert!(args.long),
+        Some(Command::List(args)) => assert!(args.detail),
         other => panic!("expected List, got {other:?}"),
     }
 }

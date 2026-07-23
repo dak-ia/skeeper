@@ -77,9 +77,9 @@ pub struct AttachArgs {
 
 #[derive(Debug, Clone, Copy, Args)]
 pub struct ListArgs {
-    /// Show attached client pids for each session
-    #[arg(short = 'l', long)]
-    pub long: bool,
+    /// Show detail sub-table for each attached client (pid, tty, ssh, attach time)
+    #[arg(short = 'd', long)]
+    pub detail: bool,
 }
 
 #[derive(Debug, Args)]

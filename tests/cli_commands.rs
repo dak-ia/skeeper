@@ -266,16 +266,16 @@ fn detach_via_cli_triggers_detach_ack() -> Result<()> {
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     handshake(&mut stream)?;
 
-    // detach.rsは attached_client_pids.is_empty() で先にbailするため、meta更新完了まで待つ
+    // detach.rsは attached_clients.is_empty() で先にbailするため、meta更新完了まで待つ
     let start = Instant::now();
     loop {
         if let Ok(m) = session::read_meta(&server.meta_path())
-            && !m.attached_client_pids.is_empty()
+            && !m.attached_clients.is_empty()
         {
             break;
         }
         if start.elapsed() >= CLEANUP_TIMEOUT {
-            bail!("attached_client_pids did not appear on meta");
+            bail!("attached_clients did not appear on meta");
         }
         sleep(Duration::from_millis(50));
     }

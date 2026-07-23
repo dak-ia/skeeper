@@ -23,7 +23,7 @@ fn server_creates_expected_files_and_reads_meta() -> Result<()> {
 
     let meta = session::read_meta(&server.meta_path())?;
     assert_eq!(meta.name, "test-startup");
-    assert!(meta.attached_client_pids.is_empty());
+    assert!(meta.attached_clients.is_empty());
     assert_eq!(meta.last_attached_at, None);
 
     Ok(())

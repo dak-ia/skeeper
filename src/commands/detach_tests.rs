@@ -3,7 +3,16 @@ use super::*;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-fn sample_meta(id: Uuid, attached_client_pids: Vec<u32>) -> session::SessionMeta {
+fn sample_meta(id: Uuid, attached_pids: Vec<u32>) -> session::SessionMeta {
+    let attached_clients = attached_pids
+        .into_iter()
+        .map(|pid| session::ClientInfo {
+            pid,
+            tty: None,
+            ssh_connection: None,
+            attached_at: OffsetDateTime::UNIX_EPOCH,
+        })
+        .collect();
     session::SessionMeta {
         id,
         name: "test".to_string(),
@@ -13,7 +22,9 @@ fn sample_meta(id: Uuid, attached_client_pids: Vec<u32>) -> session::SessionMeta
         last_attached_at: None,
         server_pid: 0,
         server_started_at: OffsetDateTime::UNIX_EPOCH,
-        attached_client_pids,
+        schema_version: session::SCHEMA_VERSION_CURRENT,
+        ipc_protocol_version: crate::ipc::IPC_PROTOCOL_VERSION,
+        attached_clients,
     }
 }
 

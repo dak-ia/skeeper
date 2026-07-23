@@ -155,6 +155,11 @@ fn connect_and_handshake(socket_path: &Path) -> Result<UnixStream> {
     })?;
 
     let (cols, rows) = terminal::size().context("Failed to get terminal size")?;
+    let tty = detect_client_tty();
+    // SSH_CONNECTIONが未設定と空文字列("")は運用上どちらも「SSH経由でない」を意味するので統一
+    let ssh_connection = std::env::var("SSH_CONNECTION")
+        .ok()
+        .filter(|s| !s.is_empty());
 
     ipc::write_client_msg(
         &mut stream,
@@ -162,6 +167,8 @@ fn connect_and_handshake(socket_path: &Path) -> Result<UnixStream> {
             client_pid: std::process::id(),
             cols,
             rows,
+            tty,
+            ssh_connection,
         },
     )?;
 
@@ -170,6 +177,15 @@ fn connect_and_handshake(socket_path: &Path) -> Result<UnixStream> {
         ServerMsg::HelloOk { .. } => Ok(stream),
         other => bail!("Unexpected server response: {other:?}"),
     }
+}
+
+/// stdin(fd 0)からttyname(3)相当を取得。stdinがttyでない環境ではNone
+fn detect_client_tty() -> Option<String> {
+    use std::os::fd::BorrowedFd;
+    let stdin_fd = unsafe { BorrowedFd::borrow_raw(0) };
+    nix::unistd::ttyname(stdin_fd)
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_owned))
 }
 
 fn run_attach_session(

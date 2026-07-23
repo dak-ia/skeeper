@@ -12,6 +12,15 @@ use uuid::Uuid;
 
 fn fixture_meta(attached_pids: Vec<u32>) -> SessionMeta {
     let ts = datetime!(2000-01-02 03:04:05 UTC);
+    let attached_clients = attached_pids
+        .into_iter()
+        .map(|pid| session::ClientInfo {
+            pid,
+            tty: None,
+            ssh_connection: None,
+            attached_at: ts,
+        })
+        .collect();
     SessionMeta {
         id: Uuid::from_u128(0x1),
         name: "sess".to_string(),
@@ -21,8 +30,14 @@ fn fixture_meta(attached_pids: Vec<u32>) -> SessionMeta {
         last_attached_at: None,
         server_pid: 1,
         server_started_at: ts,
-        attached_client_pids: attached_pids,
+        schema_version: session::SCHEMA_VERSION_CURRENT,
+        ipc_protocol_version: crate::ipc::IPC_PROTOCOL_VERSION,
+        attached_clients,
     }
+}
+
+fn pids_of(meta: &SessionMeta) -> Vec<u32> {
+    meta.attached_clients.iter().map(|c| c.pid).collect()
 }
 
 /// Receiverはテスト終了までscopeで保持しないとevent_tx.sendがErrになる。
@@ -103,7 +118,7 @@ fn attach_state_guard_disarm_keeps_active_client_and_meta_pid() {
     }
 
     assert!(active_clients.lock().unwrap().contains_key(&4321));
-    assert_eq!(meta_state.lock().unwrap().attached_client_pids, vec![4321]);
+    assert_eq!(pids_of(&meta_state.lock().unwrap()), vec![4321]);
 }
 
 #[test]
@@ -130,9 +145,9 @@ fn attach_state_guard_drop_when_armed_clears_client_and_persists_meta() {
     });
 
     assert!(!active_clients.lock().unwrap().contains_key(&4321));
-    assert!(meta_state.lock().unwrap().attached_client_pids.is_empty());
+    assert!(meta_state.lock().unwrap().attached_clients.is_empty());
     let persisted = session::read_meta(&meta_path).unwrap();
-    assert!(persisted.attached_client_pids.is_empty());
+    assert!(persisted.attached_clients.is_empty());
 }
 
 #[test]
@@ -167,12 +182,12 @@ fn attach_state_guard_drop_skips_when_attach_id_mismatched() {
         armed: true,
     });
 
-    // slotは新attach所有のまま残り、meta_pidsも削除されない
+    // slotは新attach所有のまま残り、metaも削除されない
     assert!(active_clients.lock().unwrap().contains_key(&7777));
     assert_eq!(
-        meta_state.lock().unwrap().attached_client_pids,
+        pids_of(&meta_state.lock().unwrap()),
         vec![7777],
-        "attach_id不一致でmeta_pidsも変更されないこと"
+        "attach_id不一致でmetaも変更されないこと"
     );
 }
 
@@ -206,5 +221,5 @@ fn attach_state_guard_drop_only_removes_own_pid() {
     assert!(!acl.contains_key(&100));
     assert!(acl.contains_key(&200));
     drop(acl);
-    assert_eq!(meta_state.lock().unwrap().attached_client_pids, vec![200]);
+    assert_eq!(pids_of(&meta_state.lock().unwrap()), vec![200]);
 }

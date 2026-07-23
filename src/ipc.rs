@@ -8,12 +8,21 @@ use uuid::Uuid;
 /// 1メッセージあたりの最大サイズ。DoS防御のため
 pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
 
+/// clientとserverが話すプロトコルversion。互換性を壊す変更で+1する
+pub const IPC_PROTOCOL_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMsg {
     Hello {
         client_pid: u32,
         cols: u16,
         rows: u16,
+        /// client側の端末名。listで各attachのterminal識別に使うためserverが記録する
+        #[serde(default)]
+        tty: Option<String>,
+        /// SSH経由時のSSH_CONNECTION env値。listで各attachのSSH由来を示すため
+        #[serde(default)]
+        ssh_connection: Option<String>,
     },
     Resize {
         cols: u16,

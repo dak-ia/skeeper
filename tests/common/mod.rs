@@ -236,6 +236,8 @@ pub fn handshake_as(stream: &mut UnixStream, client_pid: u32) -> Result<()> {
             client_pid,
             cols: 80,
             rows: 24,
+            tty: None,
+            ssh_connection: None,
         },
     )?;
     let resp = ipc::read_server_msg(stream)?;

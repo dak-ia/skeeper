@@ -14,6 +14,7 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::ipc;
 use crate::paths;
 use crate::session::{self, SessionMeta};
 
@@ -205,7 +206,9 @@ pub fn run(args: ServerRunArgs) -> Result<()> {
         last_attached_at: None,
         server_pid: self_pid,
         server_started_at: self_started_at,
-        attached_client_pids: Vec::new(),
+        schema_version: session::SCHEMA_VERSION_CURRENT,
+        ipc_protocol_version: ipc::IPC_PROTOCOL_VERSION,
+        attached_clients: Vec::new(),
     };
     session::write_meta_atomic(&meta_path, &meta_initial)?;
 

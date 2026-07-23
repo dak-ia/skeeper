@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use time::macros::datetime;
 use uuid::Uuid;
 
+use crate::session::{ClientInfo, SCHEMA_VERSION_CURRENT};
+
 fn make_session(name: &str, attached: bool) -> SessionMeta {
     SessionMeta {
         id: Uuid::from_u128(0x1234_5678_1234_5678_1234_5678_1234_5678),
@@ -13,7 +15,18 @@ fn make_session(name: &str, attached: bool) -> SessionMeta {
         last_attached_at: None,
         server_pid: 12345,
         server_started_at: datetime!(2000-01-02 03:04:05 UTC),
-        attached_client_pids: if attached { vec![1] } else { Vec::new() },
+        schema_version: SCHEMA_VERSION_CURRENT,
+        ipc_protocol_version: crate::ipc::IPC_PROTOCOL_VERSION,
+        attached_clients: if attached {
+            vec![ClientInfo {
+                pid: 1,
+                tty: None,
+                ssh_connection: None,
+                attached_at: datetime!(2000-01-02 03:04:05 UTC),
+            }]
+        } else {
+            Vec::new()
+        },
     }
 }
 

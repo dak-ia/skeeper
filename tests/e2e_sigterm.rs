@@ -33,11 +33,11 @@ fn client_detach_message_returns_detachack() -> Result<()> {
     let client_pid = 20001u32;
     handshake_as(&mut stream, client_pid)?;
 
-    // handshake成功後、meta.attached_client_pidsに載るまで待つ
+    // handshake成功後、meta.attached_clientsに載るまで待つ
     let start = Instant::now();
     loop {
         if let Ok(m) = session::read_meta(&server.meta_path())
-            && m.attached_client_pids.contains(&client_pid)
+            && m.attached_clients.iter().any(|c| c.pid == client_pid)
         {
             break;
         }
@@ -70,7 +70,7 @@ fn client_detach_message_returns_detachack() -> Result<()> {
     let start = Instant::now();
     loop {
         if let Ok(m) = session::read_meta(&server.meta_path())
-            && !m.attached_client_pids.contains(&client_pid)
+            && !m.attached_clients.iter().any(|c| c.pid == client_pid)
         {
             return Ok(());
         }

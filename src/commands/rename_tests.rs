@@ -34,11 +34,14 @@ fn run_errors_when_named_session_not_found() {
         std::env::set_var("HOME", dir.path());
     }
 
+    let err = run(RenameArgs {
+        new_name: "whatever".to_string(),
+        old: Some("does-not-exist".to_string()),
+    })
+    .expect_err("expected error for missing session");
+    // 復旧誘導としてsession一覧確認コマンドを案内している
     assert!(
-        run(RenameArgs {
-            new_name: "whatever".to_string(),
-            old: Some("does-not-exist".to_string()),
-        })
-        .is_err()
+        err.to_string().contains("skeeper ls"),
+        "err message should suggest `skeeper ls`, got: {err}"
     );
 }

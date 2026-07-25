@@ -35,7 +35,7 @@ pub(crate) fn run(args: AttachArgs) -> anyhow::Result<()> {
         let target_socket = paths::socket_path(&base_dir, &target.id);
         let mut stream = UnixStream::connect(&current_ctl).with_context(|| {
             format!(
-                "Failed to connect to control socket {}",
+                "Cannot reach the server for this session; it may have crashed. Run `skeeper prune`. (socket: {})",
                 current_ctl.display()
             )
         })?;

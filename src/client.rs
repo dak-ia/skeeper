@@ -23,6 +23,13 @@ const MAX_REATTACH_ATTEMPTS: u8 = 5;
 /// 再接続の間隔。詰めすぎるとspin、開けすぎるとUXが崩れる
 const REATTACH_BACKOFF: Duration = Duration::from_millis(200);
 
+/// 再接続の上限に達した際のerror。2箇所から呼ぶのでMAX_REATTACH_ATTEMPTSと文言のズレを防ぐため集約
+fn reconnect_exhausted_error() -> anyhow::Error {
+    anyhow::anyhow!(
+        "Server connection lost after {MAX_REATTACH_ATTEMPTS} reconnect attempts. The server may have crashed; try `skeeper prune`"
+    )
+}
+
 /// stdin forward threadが書き込むUnixStream slot。attach外のouter loopが
 /// 再attach/session切替のたびにswapする。stdinはCloseできないので単一threadを
 /// プロセス寿命に紐付けて生存させ、書き込み先だけを差し替える設計
@@ -106,9 +113,7 @@ pub fn attach(socket_path: &Path) -> Result<()> {
             Err(_) => {
                 retry_budget += 1;
                 if retry_budget >= MAX_REATTACH_ATTEMPTS {
-                    bail!(
-                        "Server connection lost after {MAX_REATTACH_ATTEMPTS} reconnect attempts"
-                    );
+                    return Err(reconnect_exhausted_error());
                 }
                 thread::sleep(REATTACH_BACKOFF);
                 continue;
@@ -131,9 +136,7 @@ pub fn attach(socket_path: &Path) -> Result<()> {
             AttachOutcome::UnexpectedClose => {
                 retry_budget += 1;
                 if retry_budget >= MAX_REATTACH_ATTEMPTS {
-                    bail!(
-                        "Server connection lost after {MAX_REATTACH_ATTEMPTS} reconnect attempts"
-                    );
+                    return Err(reconnect_exhausted_error());
                 }
                 thread::sleep(REATTACH_BACKOFF);
             }
@@ -175,7 +178,10 @@ fn connect_and_handshake(socket_path: &Path) -> Result<UnixStream> {
     let response = ipc::read_server_msg(&mut stream)?;
     match response {
         ServerMsg::HelloOk { .. } => Ok(stream),
-        other => bail!("Unexpected server response: {other:?}"),
+        // 具体的なvariantはユーザーには意味不明なので隠す。versionズレの示唆だけ返す
+        _ => bail!(
+            "Server returned an unexpected message during handshake (client and server versions may differ)"
+        ),
     }
 }
 

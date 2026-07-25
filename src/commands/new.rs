@@ -32,7 +32,7 @@ pub(crate) fn run(args: NewArgs) -> anyhow::Result<()> {
     paths::ensure_runtime_dir(&base_dir)?;
 
     if current_session_id(&base_dir).is_some() {
-        anyhow::bail!("Already inside a session. Run `skeeper d` to detach first");
+        anyhow::bail!("Already inside a session. Run `skeeper detach` to leave it first");
     }
 
     let shell = resolve_shell(shell_arg.as_deref(), std::env::var("SHELL").ok().as_deref());

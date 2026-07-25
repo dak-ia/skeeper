@@ -18,7 +18,9 @@ pub(crate) fn run(args: RenameArgs) -> anyhow::Result<()> {
             .iter()
             .find(|m| m.name == old_name)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Session '{old_name}' not found"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!("Session '{old_name}' not found. Run `skeeper ls` to see the list")
+            })?
     } else {
         let Some(id) = current_session_id(&base_dir) else {
             anyhow::bail!(
@@ -29,12 +31,21 @@ pub(crate) fn run(args: RenameArgs) -> anyhow::Result<()> {
             .iter()
             .find(|m| m.id == id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Current session metadata not found"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Current session metadata is missing (server may have crashed). Exit this shell or run `skeeper prune`"
+                )
+            })?
     };
 
     let ctl_path = paths::ctl_path(&base_dir, &target.id);
-    let mut stream = UnixStream::connect(&ctl_path)
-        .with_context(|| format!("Failed to connect to control socket {}", ctl_path.display()))?;
+    let mut stream = UnixStream::connect(&ctl_path).with_context(|| {
+        format!(
+            "Cannot reach the server for session '{}'; it may have crashed. Run `skeeper prune`. (socket: {})",
+            target.name,
+            ctl_path.display()
+        )
+    })?;
     ipc::write_control_msg(
         &mut stream,
         &ControlMsg::RequestRename {
@@ -58,7 +69,10 @@ pub(crate) fn run(args: RenameArgs) -> anyhow::Result<()> {
         ControlResponse::Rename(RenameResponse::Failed) => {
             anyhow::bail!("Server failed to rename session (try again in a moment)")
         }
-        other => anyhow::bail!("Unexpected response from server: {other:?}"),
+        // 具体的なvariantはユーザーには意味不明なので隠す
+        _ => anyhow::bail!(
+            "Server returned an unexpected response (client and server versions may differ)"
+        ),
     }
 }
 

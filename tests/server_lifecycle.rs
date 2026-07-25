@@ -5,13 +5,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
-use tempfile::TempDir;
-
 use skeeper::{paths, session};
 
 mod common;
 
-use common::{CLEANUP_TIMEOUT, READY_TIMEOUT, spawn_server};
+use common::{CLEANUP_TIMEOUT, READY_TIMEOUT, spawn_server, test_tempdir};
 
 #[test]
 fn server_creates_expected_files_and_reads_meta() -> Result<()> {
@@ -58,7 +56,7 @@ fn sigterm_triggers_cleanup() -> Result<()> {
 fn fork_daemon_persists_after_parent_new_exit() -> Result<()> {
     // `skeeper new -d NAME`はforkでdaemonを立てた後、親自身は即exitする。
     // 親が消えてもdaemonが動き続け、socket/metaが残っていることを確認する
-    let tmp = TempDir::new()?;
+    let tmp = test_tempdir()?;
     let runtime_dir = tmp.path().to_path_buf();
     let name = "test-fork-persist";
 

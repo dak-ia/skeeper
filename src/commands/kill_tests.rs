@@ -3,6 +3,8 @@ use super::*;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::cli::KillArgs;
+
 fn orphan_meta() -> SessionMeta {
     SessionMeta {
         id: Uuid::from_u128(0x1),
@@ -35,8 +37,8 @@ fn orphan_pid_zero_removes_files_without_signal() {
     std::fs::File::create(&sock).unwrap();
     std::fs::File::create(&meta_path).unwrap();
 
-    kill_one_session(base, &meta).unwrap();
-
+    let outcome = kill_one_session(base, &meta).unwrap();
+    assert!(matches!(outcome, KillOutcome::Killed));
     assert!(!ctl.exists());
     assert!(!sock.exists());
     assert!(!meta_path.exists());
@@ -46,5 +48,31 @@ fn orphan_pid_zero_removes_files_without_signal() {
 fn orphan_pid_zero_succeeds_when_files_missing() {
     let dir = tempfile::tempdir().unwrap();
     let meta = orphan_meta();
-    kill_one_session(dir.path(), &meta).unwrap();
+    let outcome = kill_one_session(dir.path(), &meta).unwrap();
+    assert!(matches!(outcome, KillOutcome::Killed));
+}
+
+#[test]
+fn run_errors_with_ls_hint_when_named_session_not_found() {
+    let _guard = crate::test_helpers::env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("skeeper");
+    std::fs::create_dir_all(&base).unwrap();
+    unsafe {
+        std::env::remove_var("SKEEPER_SESSION_ID");
+        std::env::set_var("XDG_RUNTIME_DIR", dir.path());
+        std::env::set_var("HOME", dir.path());
+    }
+
+    let err = run(KillArgs {
+        name: Some("does-not-exist".to_string()),
+        all: false,
+        yes: false,
+    })
+    .expect_err("expected error for missing session");
+    // 復旧誘導としてsession一覧確認コマンドを案内している
+    assert!(
+        err.to_string().contains("skeeper ls"),
+        "err message should suggest `skeeper ls`, got: {err}"
+    );
 }

@@ -2,6 +2,7 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
@@ -31,14 +32,20 @@ pub(crate) fn run(args: KillArgs) -> anyhow::Result<()> {
             .iter()
             .find(|m| m.name == name)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Session '{name}' not found"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("Session '{name}' not found. Run `skeeper ls` to see the list")
+            })?;
         (vec![t], false)
     } else if let Some(id) = current_session_id(&base_dir) {
         let t = sessions
             .iter()
             .find(|m| m.id == id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Current session metadata not found"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Current session metadata is missing (server may have crashed). Exit this shell or run `skeeper prune`"
+                )
+            })?;
         (vec![t], true)
     } else {
         if sessions.is_empty() {
@@ -68,39 +75,77 @@ pub(crate) fn run(args: KillArgs) -> anyhow::Result<()> {
         }
     }
 
+    let mut killed: Vec<&str> = Vec::new();
+    let mut local_only: Vec<(&str, u32)> = Vec::new();
     for t in &targets {
-        kill_one_session(&base_dir, t)?;
+        match kill_one_session(&base_dir, t)? {
+            KillOutcome::Killed => killed.push(t.name.as_str()),
+            KillOutcome::LocalOnly => local_only.push((t.name.as_str(), t.server_pid)),
+        }
     }
-    let names: Vec<&str> = targets.iter().map(|m| m.name.as_str()).collect();
-    println!(
-        "Killed {} session{}: {}",
-        targets.len(),
-        if targets.len() == 1 { "" } else { "s" },
-        names.join(", ")
-    );
+
+    if !killed.is_empty() {
+        println!(
+            "Killed {} session{}: {}",
+            killed.len(),
+            if killed.len() == 1 { "" } else { "s" },
+            killed.join(", ")
+        );
+    }
+    if !local_only.is_empty() {
+        // 未killはstderr+non-zero exitで自動化スクリプトに伝える
+        for (name, pid) in &local_only {
+            eprintln!(
+                "warning: could not signal server for '{name}' (pid {pid}, owned by another user); only local files were removed"
+            );
+        }
+        anyhow::bail!(
+            "{} session{} could not be fully killed (see warnings above)",
+            local_only.len(),
+            if local_only.len() == 1 { "" } else { "s" },
+        );
+    }
     Ok(())
 }
 
-fn kill_one_session(base_dir: &Path, meta: &SessionMeta) -> anyhow::Result<()> {
+/// kill_one_sessionの結果。ローカルfile掃除は済むがserver processを止められたかは別
+enum KillOutcome {
+    /// server processへ実際にsignalを届け(かは検知不能だが)、ローカルfileも掃除できた
+    Killed,
+    /// server processへsignalを届けられなかった(EPERM等)。ローカルfileのみ掃除した
+    LocalOnly,
+}
+
+fn kill_one_session(base_dir: &Path, meta: &SessionMeta) -> anyhow::Result<KillOutcome> {
     let sock = paths::socket_path(base_dir, &meta.id);
     let ctl = paths::ctl_path(base_dir, &meta.id);
     let meta_path = paths::meta_path(base_dir, &meta.id);
+
+    let remove_local = || {
+        let _ = std::fs::remove_file(&ctl);
+        let _ = std::fs::remove_file(&sock);
+        let _ = std::fs::remove_file(&meta_path);
+    };
 
     // pid==0はkill(2)で自プロセスグループ全体に配送され親シェルまで巻き込むので絶対にsignal送らない
     // is_orphanは非対応OSではErr(bail)を返すのでunwrap_or(false)で通常経路に流す
     let orphan_or_zero = meta.server_pid == 0 || session::is_orphan(meta).unwrap_or(false);
     if orphan_or_zero {
-        let _ = std::fs::remove_file(&ctl);
-        let _ = std::fs::remove_file(&sock);
-        let _ = std::fs::remove_file(&meta_path);
-        return Ok(());
+        remove_local();
+        return Ok(KillOutcome::Killed);
     }
 
-    let pid = i32::try_from(meta.server_pid)
-        .map_err(|_| anyhow::anyhow!("Invalid server pid {}", meta.server_pid))?;
+    let pid = i32::try_from(meta.server_pid).map_err(|_| {
+        anyhow::anyhow!("Session metadata is corrupted. Run `skeeper prune` to clean up")
+    })?;
 
     match signal::kill(Pid::from_raw(pid), Signal::SIGTERM) {
-        Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+        Ok(()) | Err(Errno::ESRCH) => {}
+        // 他uid所有pid=SIGTERM不可。だが自uid所有のfileだけは掃除し、呼び出し元がsummary/exit codeで区別する
+        Err(Errno::EPERM) => {
+            remove_local();
+            return Ok(KillOutcome::LocalOnly);
+        }
         Err(e) => return Err(e.into()),
     }
 
@@ -110,7 +155,7 @@ fn kill_one_session(base_dir: &Path, meta: &SessionMeta) -> anyhow::Result<()> {
             // サーバのSessionFileGuardがctlを先に消してから他を消すので、
             // sock/metaが消えている時点でctlも消えているはず。念のため明示除去
             let _ = std::fs::remove_file(&ctl);
-            return Ok(());
+            return Ok(KillOutcome::Killed);
         }
         std::thread::sleep(KILL_POLL_INTERVAL);
     }
@@ -118,17 +163,13 @@ fn kill_one_session(base_dir: &Path, meta: &SessionMeta) -> anyhow::Result<()> {
     // SIGKILLする前にもう一度is_orphanを確認する。3秒の間にサーバプロセスが死んで
     // PIDが別プロセスに再利用された可能性があるため
     if session::is_orphan(meta).unwrap_or(false) {
-        let _ = std::fs::remove_file(&ctl);
-        let _ = std::fs::remove_file(&sock);
-        let _ = std::fs::remove_file(&meta_path);
-        return Ok(());
+        remove_local();
+        return Ok(KillOutcome::Killed);
     }
 
     let _ = signal::kill(Pid::from_raw(pid), Signal::SIGKILL);
-    let _ = std::fs::remove_file(&ctl);
-    let _ = std::fs::remove_file(&sock);
-    let _ = std::fs::remove_file(&meta_path);
-    Ok(())
+    remove_local();
+    Ok(KillOutcome::Killed)
 }
 
 /// 対話プロンプト。y/yes(大小関係なし)ならtrue、その他はfalse。stdin無しの場合もfalse

@@ -23,6 +23,11 @@ pub const READY_TIMEOUT: Duration = Duration::from_secs(5);
 pub const READ_TIMEOUT: Duration = Duration::from_secs(3);
 pub const CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// macOSのdefault(`/var/folders/...`)はUnixListener::bindのsockaddr_un(104バイト)を超えることがあるので、常に短いbaseに寄せる
+pub fn test_tempdir() -> Result<TempDir> {
+    Ok(TempDir::new_in("/tmp")?)
+}
+
 /// テスト終了時にサーバプロセスを確実に回収するguard。
 /// 通常はSIGTERMでcleanup経路を通す。反応しない場合の保険でSIGKILL。
 /// forkで起動したdaemonは`skeeper new -d`の実行プロセスの子孫ではないので、
@@ -172,7 +177,7 @@ pub fn spawn_server_in(runtime_dir: &Path, name: &str, shell: &str) -> Result<Se
 /// `skeeper new -d`を呼ぶとforkで裏にdaemonが立ち上がる。実行プロセス自体は
 /// "Session created: {name}"を出して即終了するので、waitで回収してからmetaを読む
 pub fn spawn_server(name: &str, shell: &str) -> Result<ServerGuard> {
-    let tmp = TempDir::new()?;
+    let tmp = test_tempdir()?;
     let runtime_dir = tmp.path().to_path_buf();
 
     let bin = env!("CARGO_BIN_EXE_skeeper");

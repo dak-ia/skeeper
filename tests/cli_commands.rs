@@ -10,14 +10,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
-use tempfile::TempDir;
-
 use skeeper::ipc::{self, ClientMsg, ServerMsg};
 use skeeper::session;
 
 use common::{
     CLEANUP_TIMEOUT, READ_TIMEOUT, READY_TIMEOUT, handshake, pid_alive, spawn_server,
-    spawn_server_in,
+    spawn_server_in, test_tempdir,
 };
 
 fn skeeper_bin() -> &'static str {
@@ -58,7 +56,7 @@ fn kill_by_name_terminates_server_and_cleans_files() -> Result<()> {
 #[test]
 fn kill_all_terminates_multiple_sessions() -> Result<()> {
     // 2セッションが同じruntime_dir配下に並ぶ状態を作る(kill --allは共有dirを見に行くため)
-    let tmp = TempDir::new()?;
+    let tmp = test_tempdir()?;
     let s1 = spawn_server_in(tmp.path(), "kill-all-1", "/bin/cat")?;
     let s2 = spawn_server_in(tmp.path(), "kill-all-2", "/bin/cat")?;
 
@@ -122,7 +120,7 @@ fn kill_all_terminates_multiple_sessions() -> Result<()> {
 fn kill_all_with_yes_flag_bypasses_confirmation_on_null_stdin() -> Result<()> {
     // --yes/-y は tty 有無に関係なく確認を省く挙動を検証。
     // 従来は stdin が EOF (Stdio::null) だと confirm() が false を返して "Aborted" 経路になっていた
-    let tmp = TempDir::new()?;
+    let tmp = test_tempdir()?;
     let s1 = spawn_server_in(tmp.path(), "kill-yes-1", "/bin/cat")?;
     let s2 = spawn_server_in(tmp.path(), "kill-yes-2", "/bin/cat")?;
 
@@ -157,7 +155,7 @@ fn kill_all_with_yes_flag_bypasses_confirmation_on_null_stdin() -> Result<()> {
 
 #[test]
 fn list_prints_session_names() -> Result<()> {
-    let tmp = TempDir::new()?;
+    let tmp = test_tempdir()?;
     // ハンドルはlist実行中も生かしておく必要があるので`_s1`/`_s2`で束縛(即drop回避)
     let _s1 = spawn_server_in(tmp.path(), "list-one", "/bin/cat")?;
     let _s2 = spawn_server_in(tmp.path(), "list-two", "/bin/cat")?;
@@ -328,7 +326,7 @@ fn detach_via_cli_triggers_detach_ack() -> Result<()> {
 
 #[test]
 fn new_with_name_creates_session() -> Result<()> {
-    let tmp = TempDir::new()?;
+    let tmp = test_tempdir()?;
     let runtime_dir = tmp.path().to_path_buf();
     let base_dir = runtime_dir.join("skeeper");
 

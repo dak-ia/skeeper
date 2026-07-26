@@ -1,4 +1,4 @@
-name: test
+name: mangen-check
 
 on:
   push:
@@ -11,14 +11,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# 生成物とCLI定義の乖離をCIで機械的に検出する。ubuntu単独でよい(生成結果はOS非依存)
 jobs:
-  test:
-    strategy:
-      # 片方が落ちてももう片方の結果を確認できるようfail-fastは切る
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  mangen-check:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -29,4 +25,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install Rust toolchain per rust-toolchain.toml
         run: rustup show
-      - run: cargo test --workspace --all-targets --no-fail-fast
+      - name: Regenerate manpage
+        run: cargo run --quiet --package xtask -- manpage
+      - name: Fail if docs/man/ differs from committed
+        run: git diff --exit-code docs/man/

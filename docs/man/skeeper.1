@@ -1,0 +1,152 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH skeeper 1  "skeeper 0.1.0" "Skeeper Manual"
+.SH NAME
+skeeper \- Simple terminal session keeper
+.SH SYNOPSIS
+\fBskeeper\fR [\fB\-v\fR|\fB\-\-version\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+Simple terminal session keeper
+.SH OPTIONS
+.TP
+\fB\-v\fR, \fB\-\-version\fR
+Print version and exit
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.SS skeeper-new
+Create a new session and attach to it
+.PP
+\fBskeeper\-new\fR [\fB\-d\fR|\fB\-\-detached\fR] [\fB\-s\fR|\fB\-\-shell\fR] [\fB\-c\fR|\fB\-\-cwd\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] 
+.TP
+\fB\-d\fR, \fB\-\-detached\fR
+Create only, do not attach
+.TP
+\fB\-s\fR, \fB\-\-shell\fR \fI<SHELL>\fR
+Shell to run inside the session
+.TP
+\fB\-c\fR, \fB\-\-cwd\fR \fI<CWD>\fR
+Initial working directory (default: current directory)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fINAME\fR]
+Session name (a random name is generated if omitted)
+.SS skeeper-attach
+Attach to a session
+.PP
+\fBskeeper\-attach\fR [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] 
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fINAME\fR]
+Session name to attach to (opens an interactive picker if omitted)
+.SS skeeper-list
+List all sessions
+.PP
+\fBskeeper\-list\fR [\fB\-d\fR|\fB\-\-detail\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.TP
+\fB\-d\fR, \fB\-\-detail\fR
+Show detail sub\-table for each attached client (pid, tty, ssh, attach time)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS skeeper-detach
+Detach from the current session
+.PP
+\fBskeeper\-detach\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS skeeper-rename
+Rename a session
+.PP
+\fBskeeper\-rename\fR [\fB\-o\fR|\fB\-\-old\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINEW_NAME\fR> 
+.TP
+\fB\-o\fR, \fB\-\-old\fR \fI<OLD>\fR
+Rename the session with this name (default: the current one)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fINEW_NAME\fR>
+New session name
+.SS skeeper-kill
+Kill (destroy) a session
+.PP
+\fBskeeper\-kill\fR [\fB\-a\fR|\fB\-\-all\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] 
+.TP
+\fB\-a\fR, \fB\-\-all\fR
+Kill all sessions
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip confirmation prompt
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fINAME\fR]
+Session name to kill (default: the current one)
+.SS skeeper-prune
+Prune orphan session files (server crashed or otherwise dead)
+.PP
+\fBskeeper\-prune\fR [\fB\-h\fR|\fB\-\-help\fR] 
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH EXAMPLES
+.TP
+Create a new session and attach to it:
+.EX
+skeeper new myproject
+.EE
+.TP
+Create a detached session (do not attach):
+.EX
+skeeper new -d myproject
+.EE
+.TP
+Attach to an existing session (or open a picker if the name is omitted):
+.EX
+skeeper attach myproject
+.EE
+.TP
+List sessions, with per-client detail (tty, SSH, attach time):
+.EX
+skeeper list --detail
+.EE
+.TP
+Detach from the current session (leave the daemon running):
+.EX
+skeeper detach
+.EE
+.TP
+Kill a session by name and clean up its files:
+.EX
+skeeper kill myproject
+.EE
+.TP
+Clean up orphan session files after a server crash:
+.EX
+skeeper prune
+.EE
+.SH FILES
+.TP
+\fI$XDG_RUNTIME_DIR/skeeper/\fR
+Runtime directory for session state, created with mode 0700. Falls back to \fI$HOME/.skeeper/run/\fR when \fBXDG_RUNTIME_DIR\fR is unset.
+.TP
+\fI<uuid>.json\fR
+Session metadata: name, cwd, shell, server pid, attached client list. Written atomically via rename(2).
+.TP
+\fI<uuid>.sock\fR
+Unix domain socket that carries pty data between the server and its attached clients.
+.TP
+\fI<uuid>.ctl\fR
+Unix domain socket for control messages (detach request, rename, session switch).
+.SH "SEE ALSO"
+\fBtmux\fR(1), \fBscreen\fR(1), \fBabduco\fR(1), \fBdtach\fR(1)
+.SH VERSION
+v0.1.0

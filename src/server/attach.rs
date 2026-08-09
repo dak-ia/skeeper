@@ -140,7 +140,10 @@ pub(super) fn handle_client(
     // ---- snapshot送信(両ロック外) ----
     // ロック解放後にpty_readerが送ってくるPtyChunkはevent_rxに積まれる。
     // ここでsnapshotをまず送ってから下のloopに入るので、client視点の順序は
-    // snapshot → PtyChunk...となり、シェル出力の時系列が保たれる
+    // snapshot → PtyChunk...となり、シェル出力の時系列が保たれる。
+    // 再attach時のOSC/DA query再発火(client端末が応答→shell入力汚染)を避けるため、
+    // 該当sequenceだけscrollback replayから剥がす。live streamは不変
+    let snapshot = super::vt_filter::strip_terminal_queries(&snapshot);
     if !snapshot.is_empty() {
         let send_res = ipc::write_server_msg(
             &mut *write_stream.lock().unwrap(),

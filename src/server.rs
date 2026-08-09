@@ -32,6 +32,7 @@ mod control;
 mod guards;
 mod pty_io;
 mod signals;
+mod vt_filter;
 
 use attach::handle_client;
 use control::control_listener_loop;

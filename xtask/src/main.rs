@@ -1,14 +1,17 @@
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Command, CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate_to};
 use clap_mangen::Man;
 use skeeper::cli::Cli;
 
 /// docs/man/skeeper.1 の相対path。CWDに依存しないようMANIFEST_DIRから解決する
 const MANPAGE_RELATIVE_PATH: &str = "docs/man/skeeper.1";
+/// shell completionsの出力先(bash/zsh/fishの3ファイルがここに置かれる)
+const COMPLETIONS_RELATIVE_DIR: &str = "docs/completions";
 
 #[derive(Parser)]
 struct XtaskCli {
@@ -20,22 +23,28 @@ struct XtaskCli {
 enum XtaskCommand {
     /// Generate skeeper.1 manpage from the CLI definition and write it to docs/man/skeeper.1
     Manpage,
+    /// Generate shell completions (bash/zsh/fish) and write them to docs/completions/
+    Completions,
 }
 
 fn main() -> Result<()> {
     let cli = XtaskCli::parse();
     match cli.command {
         XtaskCommand::Manpage => generate_manpage(),
+        XtaskCommand::Completions => generate_completions(),
     }
 }
 
-fn generate_manpage() -> Result<()> {
-    // CARGO_MANIFEST_DIRはxtask/を指す。workspace rootは1階層上
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+/// CARGO_MANIFEST_DIRはxtask/を指す。workspace rootは1階層上
+fn workspace_root() -> Result<PathBuf> {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .context("Failed to locate workspace root")?
-        .to_path_buf();
-    let dst = workspace_root.join(MANPAGE_RELATIVE_PATH);
+        .map(Path::to_path_buf)
+        .context("Failed to locate workspace root")
+}
+
+fn generate_manpage() -> Result<()> {
+    let dst = workspace_root()?.join(MANPAGE_RELATIVE_PATH);
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
@@ -49,6 +58,22 @@ fn generate_manpage() -> Result<()> {
         .with_context(|| format!("Failed to write {}", dst.display()))?;
 
     println!("Wrote {}", dst.display());
+    Ok(())
+}
+
+fn generate_completions() -> Result<()> {
+    let dst_dir = workspace_root()?.join(COMPLETIONS_RELATIVE_DIR);
+    std::fs::create_dir_all(&dst_dir)
+        .with_context(|| format!("Failed to create {}", dst_dir.display()))?;
+
+    let mut cmd = Cli::command();
+    let bin_name = cmd.get_name().to_string();
+    // bash/zsh/fishのみ対応。elvish/powershellはユーザー層が薄いので割愛(必要になったら追加)
+    for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+        let path = generate_to(shell, &mut cmd, &bin_name, &dst_dir)
+            .with_context(|| format!("Failed to generate {shell} completion"))?;
+        println!("Wrote {}", path.display());
+    }
     Ok(())
 }
 

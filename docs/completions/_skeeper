@@ -1,0 +1,319 @@
+#compdef skeeper
+
+autoload -U is-at-least
+
+_skeeper() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-v[Print version and exit]' \
+'--version[Print version and exit]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_skeeper_commands" \
+"*::: :->skeeper" \
+&& ret=0
+    case $state in
+    (skeeper)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:skeeper-command-$line[1]:"
+        case $line[1] in
+            (new)
+_arguments "${_arguments_options[@]}" : \
+'-s+[Shell to run inside the session]:SHELL:_default' \
+'--shell=[Shell to run inside the session]:SHELL:_default' \
+'-c+[Initial working directory (default\: current directory)]:CWD:_files' \
+'--cwd=[Initial working directory (default\: current directory)]:CWD:_files' \
+'-d[Create only, do not attach]' \
+'--detached[Create only, do not attach]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name -- Session name (a random name is generated if omitted):_default' \
+&& ret=0
+;;
+(n)
+_arguments "${_arguments_options[@]}" : \
+'-s+[Shell to run inside the session]:SHELL:_default' \
+'--shell=[Shell to run inside the session]:SHELL:_default' \
+'-c+[Initial working directory (default\: current directory)]:CWD:_files' \
+'--cwd=[Initial working directory (default\: current directory)]:CWD:_files' \
+'-d[Create only, do not attach]' \
+'--detached[Create only, do not attach]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name -- Session name (a random name is generated if omitted):_default' \
+&& ret=0
+;;
+(attach)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name -- Session name to attach to (opens an interactive picker if omitted):_default' \
+&& ret=0
+;;
+(a)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name -- Session name to attach to (opens an interactive picker if omitted):_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'-d[Show detail sub-table for each attached client (pid, tty, ssh, attach time)]' \
+'--detail[Show detail sub-table for each attached client (pid, tty, ssh, attach time)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(ls)
+_arguments "${_arguments_options[@]}" : \
+'-d[Show detail sub-table for each attached client (pid, tty, ssh, attach time)]' \
+'--detail[Show detail sub-table for each attached client (pid, tty, ssh, attach time)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(d)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(rename)
+_arguments "${_arguments_options[@]}" : \
+'-o+[Rename the session with this name (default\: the current one)]:OLD:_default' \
+'--old=[Rename the session with this name (default\: the current one)]:OLD:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':new_name -- New session name:_default' \
+&& ret=0
+;;
+(r)
+_arguments "${_arguments_options[@]}" : \
+'-o+[Rename the session with this name (default\: the current one)]:OLD:_default' \
+'--old=[Rename the session with this name (default\: the current one)]:OLD:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':new_name -- New session name:_default' \
+&& ret=0
+;;
+(kill)
+_arguments "${_arguments_options[@]}" : \
+'-a[Kill all sessions]' \
+'--all[Kill all sessions]' \
+'-y[Skip confirmation prompt]' \
+'--yes[Skip confirmation prompt]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name -- Session name to kill (default\: the current one):_default' \
+&& ret=0
+;;
+(k)
+_arguments "${_arguments_options[@]}" : \
+'-a[Kill all sessions]' \
+'--all[Kill all sessions]' \
+'-y[Skip confirmation prompt]' \
+'--yes[Skip confirmation prompt]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name -- Session name to kill (default\: the current one):_default' \
+&& ret=0
+;;
+(prune)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(p)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_skeeper__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:skeeper-help-command-$line[1]:"
+        case $line[1] in
+            (new)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(attach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rename)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(kill)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(prune)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_skeeper_commands] )) ||
+_skeeper_commands() {
+    local commands; commands=(
+'new:Create a new session and attach to it' \
+'n:Create a new session and attach to it' \
+'attach:Attach to a session' \
+'a:Attach to a session' \
+'list:List all sessions' \
+'ls:List all sessions' \
+'detach:Detach from the current session' \
+'d:Detach from the current session' \
+'rename:Rename a session' \
+'r:Rename a session' \
+'kill:Kill (destroy) a session' \
+'k:Kill (destroy) a session' \
+'prune:Prune orphan session files (server crashed or otherwise dead)' \
+'p:Prune orphan session files (server crashed or otherwise dead)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'skeeper commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__attach_commands] )) ||
+_skeeper__subcmd__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper attach commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__detach_commands] )) ||
+_skeeper__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper detach commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__help_commands] )) ||
+_skeeper__subcmd__help_commands() {
+    local commands; commands=(
+'new:Create a new session and attach to it' \
+'attach:Attach to a session' \
+'list:List all sessions' \
+'detach:Detach from the current session' \
+'rename:Rename a session' \
+'kill:Kill (destroy) a session' \
+'prune:Prune orphan session files (server crashed or otherwise dead)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'skeeper help commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__help__subcmd__attach_commands] )) ||
+_skeeper__subcmd__help__subcmd__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper help attach commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__help__subcmd__detach_commands] )) ||
+_skeeper__subcmd__help__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper help detach commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__help__subcmd__help_commands] )) ||
+_skeeper__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper help help commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__help__subcmd__kill_commands] )) ||
+_skeeper__subcmd__help__subcmd__kill_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper help kill commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__help__subcmd__list_commands] )) ||
+_skeeper__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper help list commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__help__subcmd__new_commands] )) ||
+_skeeper__subcmd__help__subcmd__new_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper help new commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__help__subcmd__prune_commands] )) ||
+_skeeper__subcmd__help__subcmd__prune_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper help prune commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__help__subcmd__rename_commands] )) ||
+_skeeper__subcmd__help__subcmd__rename_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper help rename commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__kill_commands] )) ||
+_skeeper__subcmd__kill_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper kill commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__list_commands] )) ||
+_skeeper__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper list commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__new_commands] )) ||
+_skeeper__subcmd__new_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper new commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__prune_commands] )) ||
+_skeeper__subcmd__prune_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper prune commands' commands "$@"
+}
+(( $+functions[_skeeper__subcmd__rename_commands] )) ||
+_skeeper__subcmd__rename_commands() {
+    local commands; commands=()
+    _describe -t commands 'skeeper rename commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_skeeper" ]; then
+    _skeeper "$@"
+else
+    compdef _skeeper skeeper
+fi

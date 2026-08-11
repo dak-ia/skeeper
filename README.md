@@ -38,9 +38,9 @@ skeeper detach
 skeeper kill myproject
 ```
 
-Every subcommand has a short alias: `n` `a` `ls` `d` `r` `k` `p`.
+Every subcommand has a short alias: `n`(new) `a`(attach) `ls`(list) `d`(detach) `r`(rename) `k`(kill) `p`(prune).
 
-各subcommandには短いaliasが用意されています: `n` `a` `ls` `d` `r` `k` `p`。
+各subcommandには短いaliasが用意されています: `n`(new)・`a`(attach)・`ls`(list)・`d`(detach)・`r`(rename)・`k`(kill)・`p`(prune)。
 
 `skeeper list --detail` (short: `-d`) also shows attached clients, TTYs, SSH origins, and attach times.
 
@@ -60,9 +60,9 @@ Requires **Rust 1.96.1** (pinned via `rust-toolchain.toml`).
 
 ### 📘 Manpage
 
-The generated `docs/man/skeeper.1` is tracked in the repository. Install locally:
+The generated `docs/man/skeeper.1` is tracked in the repository. Install it manually:
 
-生成済みの`docs/man/skeeper.1`はリポジトリにcommit済みです。ローカルにインストールする手順は以下のとおりです:
+生成済みの`docs/man/skeeper.1`はリポジトリにcommit済みです。手動でシステムにインストールする手順は以下のとおりです:
 
 ```sh
 sudo mkdir -p /usr/local/share/man/man1
@@ -77,6 +77,24 @@ If `man skeeper` still says "no manual entry", check that `/usr/local/share/man`
 For the full command reference, use `skeeper --help`, `skeeper <subcommand> --help`, or the manpage.
 
 全subcommandの詳細な仕様は`skeeper --help`・`skeeper <subcommand> --help`・またはmanpageを参照してください。
+
+### 🔤 Shell completions
+
+bash/zsh/fish completions are pre-generated under `docs/completions/`. Install the one that matches your shell:
+
+bash/zsh/fish用のcompletionは`docs/completions/`に生成済みです。使うシェルに合わせてインストールしてください:
+
+```sh
+# bash
+sudo cp docs/completions/skeeper.bash /etc/bash_completion.d/
+
+# zsh (put on your $fpath)
+sudo cp docs/completions/_skeeper /usr/local/share/zsh/site-functions/
+
+# fish
+mkdir -p ~/.config/fish/completions
+cp docs/completions/skeeper.fish ~/.config/fish/completions/
+```
 
 ## 🏗 Architecture / アーキテクチャ
 
@@ -115,10 +133,8 @@ cargo test --workspace --all-targets --no-fail-fast
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 
-# Regenerate skeeper.1 after editing the CLI / CLI変更後のmanpage再生成
+# Regenerate skeeper.1 and shell completions after editing the CLI /
+# CLI変更後のmanpage・completions再生成
 cargo mangen
+cargo comp
 ```
-
-CI runs `test` on `ubuntu-latest` + `macos-latest`, plus `fmt`/`clippy`/`mangen-check` on `ubuntu-latest`.
-
-CIでは`test`を`ubuntu-latest` + `macos-latest`のmatrixで、`fmt`/`clippy`/`mangen-check`を`ubuntu-latest`単独で走らせています。

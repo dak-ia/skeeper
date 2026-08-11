@@ -1,3 +1,5 @@
 [alias]
 # manpage生成のショートカット。docs/man/skeeper.1 を書き換える
 mangen = "run --quiet --package xtask -- manpage"
+# shell completions生成のショートカット。docs/completions/ 配下を書き換える
+comp = "run --quiet --package xtask -- completions"

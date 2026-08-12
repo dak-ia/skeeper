@@ -1,0 +1,90 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      # 片方が落ちてももう片方の結果を確認できるようfail-fastは切る
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install Rust toolchain per rust-toolchain.toml
+        run: rustup show
+      - name: Add rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package tarball
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="skeeper-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          STAGING="dist/${NAME}"
+          mkdir -p "${STAGING}/docs"
+          cp "target/${{ matrix.target }}/release/skeeper" "${STAGING}/"
+          cp LICENSE README.md "${STAGING}/"
+          cp -r docs/man "${STAGING}/docs/"
+          cp -r docs/completions "${STAGING}/docs/"
+          tar czf "${NAME}.tar.gz" -C dist "${NAME}"
+          echo "archive=${NAME}.tar.gz" >> "${GITHUB_OUTPUT}"
+      - name: Upload build artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: skeeper-${{ matrix.target }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # gh release create でReleaseを作成・asset uploadするためにwrite必須
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # 同tagのReleaseが既にあれば作成をskipしてasset uploadだけ差し替える。
+          # tag再pushやrelease jobのre-runで冪等に動くようにする
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
+          gh release upload "${GITHUB_REF_NAME}" artifacts/*.tar.gz --clobber

@@ -18,8 +18,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # x86_64はarm64 macからcross-compile。macos-13(intel) runnerはpeak時間に枠取得できずEOL傾向のため。
+          # macOS SDKは同一OS内の他archへのcross buildを追加toolchain無しでサポートする
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-unknown-linux-gnu

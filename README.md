@@ -48,6 +48,18 @@ Every subcommand has a short alias: `n`(new) `a`(attach) `ls`(list) `d`(detach) 
 
 ## 📦 Installation / インストール
 
+### Homebrew (macOS / Linux)
+
+```sh
+brew install dak-ia/skeeper/skeeper
+```
+
+Installs the `skeeper` binary along with the manpage (`man skeeper`) and bash/zsh/fish completions.
+
+`skeeper`本体・manpage(`man skeeper`)・bash/zsh/fishのcompletionをまとめて配置します。
+
+### From source / ソースから
+
 ```sh
 git clone https://github.com/dak-ia/skeeper.git
 cd skeeper
@@ -60,9 +72,9 @@ Requires **Rust 1.96.1** (pinned via `rust-toolchain.toml`).
 
 ### 📘 Manpage
 
-The generated `docs/man/skeeper.1` is tracked in the repository. Install it manually:
+Homebrew installs the manpage automatically. When installing from source, place `docs/man/skeeper.1` manually:
 
-生成済みの`docs/man/skeeper.1`はリポジトリにcommit済みです。手動でシステムにインストールする手順は以下のとおりです:
+Homebrew経由の場合はmanpageも同時にインストールされます。ソースからインストールした場合は`docs/man/skeeper.1`を手動で配置してください:
 
 ```sh
 sudo mkdir -p /usr/local/share/man/man1
@@ -80,9 +92,9 @@ For the full command reference, use `skeeper --help`, `skeeper <subcommand> --he
 
 ### 🔤 Shell completions
 
-bash/zsh/fish completions are pre-generated under `docs/completions/`. Install the one that matches your shell:
+Homebrew installs completions for bash/zsh/fish automatically. When installing from source, copy the file that matches your shell:
 
-bash/zsh/fish用のcompletionは`docs/completions/`に生成済みです。使うシェルに合わせてインストールしてください:
+Homebrew経由の場合はbash/zsh/fishのcompletionも同時にインストールされます。ソースからインストールした場合は使うシェルに合わせて手動で配置してください:
 
 ```sh
 # bash
